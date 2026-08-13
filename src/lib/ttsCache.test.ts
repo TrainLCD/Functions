@@ -91,6 +91,23 @@ describe('writeTtsCache', () => {
     expect(put.mock.calls[1][0]).toBe('caches/tts/en/abc123.pcm');
   });
 
+  it.each([
+    ['audio/opus', 'opus'],
+    ['audio/aac', 'aac'],
+    ['audio/flac', 'flac'],
+  ])('stores %s as .%s', async (mimeType, ext) => {
+    // TTS_RESPONSE_FORMAT は opus/aac/flac も受け付けるため拡張子も合わせる
+    const { env, put } = createEnv();
+
+    await writeTtsCache(
+      { ...basePayload, jaAudioMimeType: mimeType, enAudioMimeType: mimeType },
+      env
+    );
+
+    expect(put.mock.calls[0][0]).toBe(`caches/tts/ja/abc123.${ext}`);
+    expect(put.mock.calls[1][0]).toBe(`caches/tts/en/abc123.${ext}`);
+  });
+
   it('writes nothing when no audio was produced', async () => {
     const { env, put, kvPut } = createEnv();
     const errorSpy = jest.spyOn(console, 'error').mockImplementation();

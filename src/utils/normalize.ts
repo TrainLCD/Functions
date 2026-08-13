@@ -2,8 +2,9 @@ import { removeMacron } from './removeMacron';
 
 // ハイフン区切りの頭字語（J-R / J-Y など）。アプリ側が「JR」を読み間違えられない
 // 表記へ倒してから送ってくるため、これを capitalizeSegment に通して "J-r" へ
-// 崩されないよう素通しする。
-const HYPHENATED_INITIALISM = /^[A-Z](?:-[A-Z])+$/;
+// 崩されないよう素通しする。文末・カンマ前（"J-R." / "J-R,"）も対象にするため、
+// セグメント全体一致ではなく後続が英数字でないことを先読みで判定する。
+const HYPHENATED_INITIALISM = /^[A-Z](?:-[A-Z])+(?=$|[^A-Za-z0-9])/;
 
 const capitalizeSegment = (seg: string): string => {
   if (HYPHENATED_INITIALISM.test(seg)) {

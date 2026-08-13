@@ -25,6 +25,11 @@ const OPENAI_VOICES = new Set([
 export const isOpenAiVoiceName = (voiceName: string): boolean =>
   OPENAI_VOICES.has(voiceName.trim().toLowerCase());
 
+// 環境変数の設定ミス（Azure 時代の値の残留など）でも合成を落とさないための
+// 最終フォールバック。ここは検証済みの定数なので必ず OpenAI が受理する。
+export const DEFAULT_TTS_VOICE = 'nova';
+export const DEFAULT_TTS_MODEL = 'gpt-4o-mini-tts';
+
 /**
  * 使用するボイス名を決める。
  * 優先順位: リクエスト指定 → KV の設定 → 環境変数の既定値。
@@ -47,7 +52,12 @@ export const resolveOpenAiVoiceName = (
     return configured.toLowerCase();
   }
 
-  return defaultVoiceName;
+  // 環境変数由来の既定値も無検証で通さない。不正なら OpenAI が 400 を返し、
+  // /tts 全体が失敗してしまうため、既知のボイスへ倒す。
+  const fallback = defaultVoiceName?.trim() ?? '';
+  return fallback && isOpenAiVoiceName(fallback)
+    ? fallback.toLowerCase()
+    : DEFAULT_TTS_VOICE;
 };
 
 // 合成に使ってよいモデル。クライアントの指定をそのまま OpenAI へ流すと、
@@ -78,5 +88,9 @@ export const resolveTtsModel = (
     return configured.toLowerCase();
   }
 
-  return defaultModel;
+  // ボイス名と同様、環境変数由来の既定値も検証してから採用する
+  const fallback = defaultModel?.trim() ?? '';
+  return fallback && isTtsModel(fallback)
+    ? fallback.toLowerCase()
+    : DEFAULT_TTS_MODEL;
 };

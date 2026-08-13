@@ -20,6 +20,16 @@ describe('utils/normalize.ts', () => {
     expect(normalizeRomanText('Osaki, J-Y 24.')).toBe('Osaki, J-Y 24.');
   });
 
+  it('keeps hyphenated initialisms next to punctuation', () => {
+    // 文末やカンマの直前でも J-r に崩さない
+    expect(normalizeRomanText('Please transfer to the J-R.')).toBe(
+      'Please transfer to the J-R.'
+    );
+    expect(normalizeRomanText('Transfer to the J-R, and the subway.')).toBe(
+      'Transfer to the J-R, and the subway.'
+    );
+  });
+
   it.each(['Tokyo', 'tOkyo'])('text: %s', (text) => {
     expect(normalizeRomanText(text)).toBe('Tokyo');
   });

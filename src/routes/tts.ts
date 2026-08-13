@@ -6,11 +6,16 @@ import {
   parseCallableData,
 } from '../lib/callable';
 import { bytesToBase64, sha256Hex } from '../lib/crypto';
-import { synthesizeSpeech, type TtsOptions } from '../lib/openai/tts';
+import {
+  normalizeResponseFormat,
+  parseSpeed,
+  synthesizeSpeech,
+  type TtsOptions,
+} from '../lib/openai/tts';
 import { writeTtsCache } from '../lib/ttsCache';
 import type { Env } from '../types';
 import { normalizeRomanText } from '../utils/normalize';
-import { stripSsml, utf8ByteLength } from '../utils/ssml';
+import { stripSsml, truncateToByteLimit, utf8ByteLength } from '../utils/ssml';
 import { resolveOpenAiVoiceName, resolveTtsModel } from '../utils/ttsVoice';
 
 interface TtsRequest {
@@ -65,15 +70,19 @@ const getTtsConfig = async (env: Env): Promise<TtsConfig> => {
   }
 };
 
-const computeId = async (payload: {
+// JSON.stringify の第2引数に配列を渡すと「その名前のキーだけ」を全階層で
+// 直列化する。ネストしたオプションは名前がリストに無いと丸ごと落ちるため、
+// キャッシュキーへ含めたい値はすべてトップレベルへ平坦化して渡すこと。
+export const computeId = async (payload: {
   enVoiceName: string;
   instructionsEn: string;
   instructionsJa: string;
   jaVoiceName: string;
   model: string;
+  responseFormat: string;
+  speed: number | null;
   textEn: string;
   textJa: string;
-  ttsOptions: TtsOptions;
 }): Promise<string> => {
   const obj = { ...payload, version: HASH_VERSION } as const;
   const hashPayload = JSON.stringify(obj, Object.keys(obj).sort());
@@ -127,9 +136,7 @@ export const resolveInstructions = (
   }
   // 上限超過は弾かずに切り詰める。読み方の指示は本文ではないため、
   // これだけで放送そのものを失敗させる必要はない。
-  return utf8ByteLength(value) > INSTRUCTIONS_BYTE_LIMIT
-    ? value.slice(0, INSTRUCTIONS_BYTE_LIMIT)
-    : value;
+  return truncateToByteLimit(value, INSTRUCTIONS_BYTE_LIMIT);
 };
 
 export const handleTts = async (
@@ -184,12 +191,11 @@ export const handleTts = async (
     env.TTS_INSTRUCTIONS_EN
   );
 
-  // 合成オプションもキャッシュキーに含める（responseFormat/speed を変えたら
-  // 別の音声になるため、同じ voice:${id} を再利用させない）。
-  const ttsOptions: TtsOptions = {
-    responseFormat: env.TTS_RESPONSE_FORMAT || undefined,
-    speed: env.TTS_SPEED || undefined,
-  };
+  // 環境変数は文字列なので、送信前に正規化した値を作る。この正規化後の値を
+  // そのままキャッシュキーにも使い、設定変更が確実に別 ID になるようにする。
+  const responseFormat = normalizeResponseFormat(env.TTS_RESPONSE_FORMAT);
+  const speed = parseSpeed(env.TTS_SPEED);
+  const ttsOptions: TtsOptions = { responseFormat, speed };
 
   const id = await computeId({
     enVoiceName,
@@ -197,9 +203,10 @@ export const handleTts = async (
     instructionsJa,
     jaVoiceName,
     model,
+    responseFormat,
+    speed: speed ?? null,
     textEn,
     textJa,
-    ttsOptions,
   });
 
   // --- キャッシュ照会 ---

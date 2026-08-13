@@ -17,12 +17,12 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const GATEWAY_HEADERS = { 'cf-aig-collect-log-payload': 'false' } as const;
 
 export interface TtsOptions {
-  /** 読み方の指示（gpt-4o-mini-tts の instructions）。未指定なら付けない */
+  /** 読み方の指示（instructions 対応モデルのみ）。未指定なら付けない */
   instructions?: string;
   /** 応答フォーマット。未指定なら mp3 */
   responseFormat?: string;
-  /** 読み上げ速度（0.25〜4.0）。未指定なら付けない */
-  speed?: string;
+  /** 読み上げ速度（0.25〜4.0）。未指定なら付けない。API は数値を要求する */
+  speed?: number;
 }
 
 export interface SynthesizeSpeechParams {
@@ -53,6 +53,37 @@ const MIME_BY_FORMAT: Record<string, string> = {
   pcm: 'audio/pcm;rate=24000',
 };
 
+// instructions を受け付けないモデル。旧 tts-1 系に instructions を送ると
+// OpenAI が 400 を返し、/tts 全体が失敗するため送信対象から外す。
+const INSTRUCTIONS_UNSUPPORTED_MODELS = new Set(['tts-1', 'tts-1-hd']);
+
+export const modelSupportsInstructions = (model: string): boolean =>
+  !INSTRUCTIONS_UNSUPPORTED_MODELS.has(model.trim().toLowerCase());
+
+/**
+ * 応答フォーマットを既知の値へ正規化する。環境変数由来の任意文字列（`MP3` の
+ * ような大文字や誤字）をそのまま送ると OpenAI が 400 を返し、MIME も引けなくなる。
+ */
+export const normalizeResponseFormat = (format?: string): string => {
+  const value = format?.trim().toLowerCase() || '';
+  return value in MIME_BY_FORMAT ? value : 'mp3';
+};
+
+/**
+ * 読み上げ速度を数値へ正規化する。環境変数は文字列なので、そのまま送ると
+ * API のスキーマ検証（number）に弾かれる。範囲外・非数は未指定として扱う。
+ */
+export const parseSpeed = (speed?: string | number): number | undefined => {
+  if (speed === undefined || speed === null || speed === '') {
+    return undefined;
+  }
+  const parsed = typeof speed === 'number' ? speed : Number(speed.trim());
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return parsed >= 0.25 && parsed <= 4.0 ? parsed : undefined;
+};
+
 /** リクエストの送信先を組み立てる。Gateway 指定時は末尾スラッシュの揺れを吸収する。 */
 export const buildSpeechUrl = (gatewayBaseUrl?: string): string => {
   const gateway = gatewayBaseUrl?.replace(/\/+$/, '') || '';
@@ -67,15 +98,18 @@ export const buildSpeechRequestBody = (params: {
   voiceName: string;
   text: string;
   opts?: TtsOptions;
-}): Record<string, string> => {
+}): Record<string, string | number> => {
   const { model, voiceName, text, opts = {} } = params;
+  const speed = parseSpeed(opts.speed);
   return {
     model,
     voice: voiceName,
     input: text,
-    response_format: opts.responseFormat || 'mp3',
-    ...(opts.instructions ? { instructions: opts.instructions } : {}),
-    ...(opts.speed ? { speed: opts.speed } : {}),
+    response_format: normalizeResponseFormat(opts.responseFormat),
+    ...(opts.instructions && modelSupportsInstructions(model)
+      ? { instructions: opts.instructions }
+      : {}),
+    ...(speed !== undefined ? { speed } : {}),
   };
 };
 
@@ -105,10 +139,10 @@ export const synthesizeSpeech = async (
     );
   }
 
-  const format = opts.responseFormat || 'mp3';
+  const format = normalizeResponseFormat(opts.responseFormat);
   const buf = await res.arrayBuffer();
   return {
     audioContent: bytesToBase64(buf),
-    mimeType: MIME_BY_FORMAT[format] ?? 'application/octet-stream',
+    mimeType: MIME_BY_FORMAT[format],
   };
 };

@@ -61,6 +61,7 @@ wrangler queues create feedback-triage-dev
 ```bash
 wrangler secret put SESSION_JWT_SECRET          # signing key for session JWTs (any long random string)
 wrangler secret put GOOGLE_PLAY_SA_KEY         # Android Publisher SA key JSON (single-line string)
+wrangler secret put OPENAI_API_KEY              # TTS synthesis and the conversational agent
 wrangler secret put OCTOKIT_PAT
 wrangler secret put DISCORD_CS_WEBHOOK_URL
 wrangler secret put DISCORD_CRASH_WEBHOOK_URL

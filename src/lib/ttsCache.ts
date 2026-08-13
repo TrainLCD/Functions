@@ -9,10 +9,17 @@
 import type { Env, TtsCachePayload } from '../types';
 import { base64ToBytes } from './crypto';
 
-const getCacheFileExtension = (mimeType: string): 'mp3' | 'wav' | 'pcm' => {
+type CacheFileExtension = 'mp3' | 'wav' | 'opus' | 'aac' | 'flac' | 'pcm';
+
+// TTS_RESPONSE_FORMAT は opus / aac / flac も受け付けるため、R2 の拡張子も
+// 形式に合わせる。判定できない場合のみ生 PCM 扱いにする。
+const getCacheFileExtension = (mimeType: string): CacheFileExtension => {
   const normalized = mimeType.toLowerCase();
   if (normalized.includes('mpeg') || normalized.includes('mp3')) return 'mp3';
   if (normalized.includes('wav')) return 'wav';
+  if (normalized.includes('opus')) return 'opus';
+  if (normalized.includes('aac')) return 'aac';
+  if (normalized.includes('flac')) return 'flac';
   return 'pcm';
 };
 

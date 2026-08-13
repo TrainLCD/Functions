@@ -1,4 +1,6 @@
 import {
+  DEFAULT_TTS_MODEL,
+  DEFAULT_TTS_VOICE,
   isOpenAiVoiceName,
   isTtsModel,
   resolveOpenAiVoiceName,
@@ -49,6 +51,16 @@ describe('ttsVoice (OpenAI)', () => {
     expect(resolveOpenAiVoiceName(undefined, undefined, 'nova')).toBe('nova');
     expect(resolveOpenAiVoiceName(42, {}, 'nova')).toBe('nova');
   });
+
+  it('validates the env default too, so a stale Azure value never reaches OpenAI', () => {
+    // 環境変数の設定ミスをそのまま送ると OpenAI が 400 を返し /tts が落ちる
+    expect(
+      resolveOpenAiVoiceName(undefined, undefined, 'ja-JP-NanamiNeural')
+    ).toBe(DEFAULT_TTS_VOICE);
+    expect(resolveOpenAiVoiceName(undefined, undefined, '')).toBe(
+      DEFAULT_TTS_VOICE
+    );
+  });
 });
 
 describe('resolveTtsModel', () => {
@@ -79,5 +91,12 @@ describe('resolveTtsModel', () => {
     expect(resolveTtsModel(undefined, undefined, 'gpt-4o-mini-tts')).toBe(
       'gpt-4o-mini-tts'
     );
+  });
+
+  it('validates the env default too', () => {
+    expect(resolveTtsModel(undefined, undefined, 'gpt-4o')).toBe(
+      DEFAULT_TTS_MODEL
+    );
+    expect(resolveTtsModel(undefined, undefined, '')).toBe(DEFAULT_TTS_MODEL);
   });
 });
