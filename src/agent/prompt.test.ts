@@ -72,9 +72,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain(
       'search_stations_by_name の結果は現在駅からの直通到達性しか保証しない'
     );
-    expect(prompt).toContain(
-      'それだけを根拠に駅を乗換地点として扱わない'
-    );
+    expect(prompt).toContain('それだけを根拠に駅を乗換地点として扱わない');
     expect(prompt).toContain(
       '最終目的地への接続を確認できない場合は suggestions を空配列'
     );

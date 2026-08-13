@@ -1,9 +1,19 @@
 import { removeMacron } from './removeMacron';
 
-const capitalizeSegment = (seg: string): string =>
-  /[A-Z]/.test(seg)
+// ハイフン区切りの頭字語（J-R / J-Y など）。アプリ側が「JR」を読み間違えられない
+// 表記へ倒してから送ってくるため、これを capitalizeSegment に通して "J-r" へ
+// 崩されないよう素通しする。文末・カンマ前（"J-R." / "J-R,"）も対象にするため、
+// セグメント全体一致ではなく後続が英数字でないことを先読みで判定する。
+const HYPHENATED_INITIALISM = /^[A-Z](?:-[A-Z])+(?=$|[^A-Za-z0-9])/;
+
+const capitalizeSegment = (seg: string): string => {
+  if (HYPHENATED_INITIALISM.test(seg)) {
+    return seg;
+  }
+  return /[A-Z]/.test(seg)
     ? seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase()
     : seg;
+};
 
 // テキストノード（SSML タグの外側）だけに掛ける正規化。タグやその属性値
 // （<sub alias="Sta."> や <phoneme ph="..."> 等）を壊さないため、タグ部分には適用しない。

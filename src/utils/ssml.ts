@@ -22,3 +22,26 @@ export const stripSsml = (text: string): string =>
 /** UTF-8 バイト長。 */
 export const utf8ByteLength = (s: string): number =>
   new TextEncoder().encode(s).length;
+
+/**
+ * UTF-8 バイト数の上限に合わせて切り詰める。
+ * 文字数で切ると日本語（1 文字 3 バイト）では上限を守れないため、コードポイント
+ * 単位で積んでバイト数を数える。壊れた文字やサロゲートペアの分割は起きない。
+ */
+export const truncateToByteLimit = (text: string, limit: number): string => {
+  if (limit <= 0 || utf8ByteLength(text) <= limit) {
+    return text;
+  }
+
+  let bytes = 0;
+  let truncated = '';
+  for (const char of text) {
+    const charBytes = utf8ByteLength(char);
+    if (bytes + charBytes > limit) {
+      break;
+    }
+    bytes += charBytes;
+    truncated += char;
+  }
+  return truncated;
+};

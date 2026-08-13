@@ -6,7 +6,7 @@ single Worker.
 
 ## Features
 
-- **TTS synthesis** (`POST /tts`): synthesizes SSML into audio via Azure Speech and caches it in KV/R2.
+- **TTS synthesis** (`POST /tts`): synthesizes plain text into audio via OpenAI `gpt-4o-mini-tts` and caches it in KV/R2.
 - **Session issuance** (`POST /auth/token`): issues a short-lived session JWT from an install ID (the replacement for Firebase anonymous auth).
 - **Feedback intake** (`POST /postFeedback`): enqueues feedback onto the triage queue.
 - **Image upload** (`POST /feedback/upload-image`): stores feedback images in R2 and returns a public URL.
@@ -22,7 +22,7 @@ single Worker.
 - **R2** — audio binaries and feedback images
 - **Cloudflare Queues** — `feedback-triage`
 - **Workers AI** — feedback triage
-- **Azure Speech** — TTS synthesis (SSML)
+- **OpenAI** — TTS synthesis (`gpt-4o-mini-tts`) and the conversational agent
 - **Google Android Publisher API** — Google Play review retrieval (service-account JWT)
 - **TypeScript / Biome / Jest / Wrangler**
 
@@ -60,8 +60,8 @@ wrangler queues create feedback-triage-dev
 
 ```bash
 wrangler secret put SESSION_JWT_SECRET          # signing key for session JWTs (any long random string)
-wrangler secret put AZURE_SPEECH_KEY            # Azure Speech subscription key
 wrangler secret put GOOGLE_PLAY_SA_KEY         # Android Publisher SA key JSON (single-line string)
+wrangler secret put OPENAI_API_KEY              # TTS synthesis and the conversational agent
 wrangler secret put OCTOKIT_PAT
 wrangler secret put DISCORD_CS_WEBHOOK_URL
 wrangler secret put DISCORD_CRASH_WEBHOOK_URL
@@ -76,7 +76,7 @@ You can also bulk-load secrets with the helper scripts: copy
 
 ### Non-secret configuration (vars)
 
-See `vars` in `wrangler.jsonc`. Configure the Azure region, voice names, AI model
+See `vars` in `wrangler.jsonc`. Configure the TTS model, voice names, AI model
 name, package name, public upload URL (the R2 public domain), and so on per
 environment.
 
@@ -103,10 +103,51 @@ format.
 
 A session JWT is obtained from `POST /auth/token` (body `{ "installId": "<uuid>" }`).
 
+### `POST /tts`
+
+Synthesis runs on OpenAI `gpt-4o-mini-tts`, which does **not** interpret SSML —
+the client sends plain text and steers delivery with `instructions`.
+
+```json
+{
+  "data": {
+    "textJa": "次は、オオサキです",
+    "textEn": "The next station is Osaki, J-Y 24.",
+    "model": "gpt-4o-mini-tts",
+    "jaVoiceName": "nova",
+    "enVoiceName": "nova",
+    "instructionsJa": "…",
+    "instructionsEn": "…"
+  }
+}
+```
+
+Every field is optional except that **at least one of `textJa` / `textEn` must
+be present**. Synthesis is billed per character, so the app omits a language the
+user has switched off; only the languages it asks for are synthesized, cached,
+and returned. `model` and the voice names are validated against an allowlist —
+anything unrecognized falls back to the KV config (`config:tts`) and then to the
+`TTS_*` vars, so a client cannot name an arbitrary (expensive) model.
+
+The response carries only the requested languages:
+
+```json
+{
+  "result": {
+    "id": "<sha256 of the request, used as the cache key>",
+    "jaAudioContent": "<base64>",
+    "jaAudioMimeType": "audio/mpeg",
+    "enAudioContent": "<base64>",
+    "enAudioMimeType": "audio/mpeg"
+  }
+}
+```
+
 ## Testing strategy
 
-Unit tests cover pure functions (SSML formatting, voice-name resolution, triage
-JSON normalization, review parsing) with Jest. Runtime integration for HTTP /
+Unit tests cover pure functions (TTS request building, voice/model resolution,
+text validation, cache writes, triage JSON normalization, review parsing) with
+Jest. Runtime integration for HTTP /
 queue / Cron is verified with `wrangler dev` / `wrangler dev --test-scheduled`.
 
 ## few-shot data
@@ -142,13 +183,13 @@ the KV namespace and R2 bucket from `wrangler.jsonc`).
 
 ### `find-tts-cache`
 
-Searches the TTS cache by SSML body and optionally deletes the matching KV
+Searches the TTS cache by spoken text and optionally deletes the matching KV
 document and R2 audio. KV is read via `wrangler kv key list` / `wrangler kv bulk
 get` and deleted via `wrangler kv key delete`; R2 audio is removed via `wrangler
 r2 object delete`.
 
 ```bash
-npm run find-tts-cache -- "東京" --field ssmlJa
+npm run find-tts-cache -- "東京" --field textJa
 npm run find-tts-cache -- "東京" --delete
 npm run find-tts-cache -- "東京" --env production --delete
 ```
