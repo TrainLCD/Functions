@@ -40,12 +40,15 @@
 
   "vars": {
     "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
-    "AZURE_SPEECH_REGION": "southeastasia",
-    "AZURE_TTS_OUTPUT_FORMAT": "audio-48khz-192kbitrate-mono-mp3",
-    // HD（DragonHD）ボイスは <prosody> 非対応のため AZURE_TTS_RATE は設定しない
     "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
-    "TTS_JA_VOICE_NAME": "ja-JP-Nanami:DragonHDLatestNeural",
-    "TTS_EN_VOICE_NAME": "en-US-Jenny:DragonHDOmniLatestNeural",
+    // --- TTS（/tts）---
+    // gpt-4o-mini-tts は SSML 非対応。声色・速度・間の取り方は instructions で指示する。
+    // ボイスは多言語対応のため、日英とも同じ女性声にして一人のアナウンサーに揃える。
+    "TTS_MODEL": "gpt-4o-mini-tts",
+    "TTS_JA_VOICE_NAME": "nova",
+    "TTS_EN_VOICE_NAME": "nova",
+    "TTS_INSTRUCTIONS_JA": "鉄道の車内自動放送のアナウンサーとして、落ち着いた丁寧な女性の声で読み上げてください。一定の速さを保ち、句読点では短く間を取ります。駅名や路線名は一語ずつ明瞭に発音し、感情を込めすぎず、事務的で聞き取りやすい調子にしてください。",
+    "TTS_INSTRUCTIONS_EN": "Read this as an automated train announcement in a calm, polite female voice. Keep a steady pace, pause briefly at commas, and pronounce station and line names clearly. Stay neutral and business-like rather than expressive.",
     "SESSION_TOKEN_TTL_SECONDS": "3600",
     "UPLOAD_PUBLIC_BASE_URL": "https://uploads-dev.trainlcd.app",
     "FEW_SHOT_KV_KEY": "config:fewshot",
@@ -66,7 +69,7 @@
   },
 
   // secrets（`wrangler secret put <NAME>` で投入。コミットしない）:
-  //   SESSION_JWT_SECRET / AZURE_SPEECH_KEY / GOOGLE_PLAY_SA_KEY / APPSTORE_CONNECT_KEY /
+  //   SESSION_JWT_SECRET / GOOGLE_PLAY_SA_KEY / APPSTORE_CONNECT_KEY /
   //   OCTOKIT_PAT / DISCORD_CS_WEBHOOK_URL / DISCORD_CRASH_WEBHOOK_URL / DISCORD_REVIEW_WEBHOOK_URL /
   //   ANTHROPIC_API_KEY / OPENAI_API_KEY / LANGSMITH_API_KEY
 
@@ -96,12 +99,13 @@
       "services": [{ "binding": "SAPI_BFF", "service": "sapi-bff" }],
       "vars": {
         "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
-        "AZURE_SPEECH_REGION": "southeastasia",
-        "AZURE_TTS_OUTPUT_FORMAT": "audio-48khz-192kbitrate-mono-mp3",
-        // HD（DragonHD）ボイスは <prosody> 非対応のため AZURE_TTS_RATE は設定しない
         "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
-        "TTS_JA_VOICE_NAME": "ja-JP-Nanami:DragonHDLatestNeural",
-        "TTS_EN_VOICE_NAME": "en-US-Jenny:DragonHDLatestNeural",
+        // --- TTS（/tts）---
+        "TTS_MODEL": "gpt-4o-mini-tts",
+        "TTS_JA_VOICE_NAME": "nova",
+        "TTS_EN_VOICE_NAME": "nova",
+        "TTS_INSTRUCTIONS_JA": "鉄道の車内自動放送のアナウンサーとして、落ち着いた丁寧な女性の声で読み上げてください。一定の速さを保ち、句読点では短く間を取ります。駅名や路線名は一語ずつ明瞭に発音し、感情を込めすぎず、事務的で聞き取りやすい調子にしてください。",
+        "TTS_INSTRUCTIONS_EN": "Read this as an automated train announcement in a calm, polite female voice. Keep a steady pace, pause briefly at commas, and pronounce station and line names clearly. Stay neutral and business-like rather than expressive.",
         "SESSION_TOKEN_TTL_SECONDS": "3600",
         "UPLOAD_PUBLIC_BASE_URL": "https://uploads.trainlcd.app",
         "FEW_SHOT_KV_KEY": "config:fewshot",

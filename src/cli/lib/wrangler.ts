@@ -219,6 +219,10 @@ export function confirm(prompt: string): Promise<boolean> {
 // --- 共有: voice メタの型 ---
 export interface VoiceCacheRecord {
   id: string;
+  model?: string;
+  textJa?: string;
+  textEn?: string;
+  /** Azure/SSML 時代のレコード。旧エントリを検索・削除できるよう残している */
   ssmlJa?: string;
   ssmlEn?: string;
   pathJa?: string;

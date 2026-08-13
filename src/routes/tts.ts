@@ -1,28 +1,34 @@
-/** POST /tts — Azure Speech で音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
+/** POST /tts — OpenAI(gpt-4o-mini-tts) で音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
 import { verifySessionToken } from '../lib/auth/session';
-import { synthesizeSpeech, type TtsOptions } from '../lib/azure/tts';
 import {
   CallableError,
   callableSuccess,
   parseCallableData,
 } from '../lib/callable';
 import { bytesToBase64, sha256Hex } from '../lib/crypto';
+import { synthesizeSpeech, type TtsOptions } from '../lib/openai/tts';
 import { writeTtsCache } from '../lib/ttsCache';
 import type { Env } from '../types';
 import { normalizeRomanText } from '../utils/normalize';
 import { stripSsml, utf8ByteLength } from '../utils/ssml';
-import { resolveAzureVoiceName } from '../utils/ttsVoice';
+import { resolveOpenAiVoiceName, resolveTtsModel } from '../utils/ttsVoice';
 
 interface TtsRequest {
-  ssmlJa?: unknown;
-  ssmlEn?: unknown;
+  textJa?: unknown;
+  textEn?: unknown;
+  model?: unknown;
   jaVoiceName?: unknown;
   enVoiceName?: unknown;
+  instructionsJa?: unknown;
+  instructionsEn?: unknown;
 }
 
 interface TtsConfig {
+  model?: string;
   jaVoiceName?: string;
   enVoiceName?: string;
+  instructionsJa?: string;
+  instructionsEn?: string;
 }
 
 interface VoiceCacheMeta {
@@ -33,8 +39,10 @@ interface VoiceCacheMeta {
 }
 
 const TEXT_BYTE_LIMIT = 4000;
-const RAW_SSML_BYTE_LIMIT = 10000;
-const HASH_VERSION = 12;
+// 読み方の指示は声色の調整用で、長文を受ける必要はない。無制限に受けると
+// リクエストサイズとキャッシュキーが無駄に膨らむため上限を設ける。
+const INSTRUCTIONS_BYTE_LIMIT = 2000;
+const HASH_VERSION = 13;
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;
@@ -59,9 +67,12 @@ const getTtsConfig = async (env: Env): Promise<TtsConfig> => {
 
 const computeId = async (payload: {
   enVoiceName: string;
+  instructionsEn: string;
+  instructionsJa: string;
   jaVoiceName: string;
-  ssmlEn: string;
-  ssmlJa: string;
+  model: string;
+  textEn: string;
+  textJa: string;
   ttsOptions: TtsOptions;
 }): Promise<string> => {
   const obj = { ...payload, version: HASH_VERSION } as const;
@@ -69,14 +80,56 @@ const computeId = async (payload: {
   return sha256Hex(hashPayload);
 };
 
-const requireString = (value: unknown, name: string): string => {
-  if (typeof value !== 'string' || value.length === 0) {
+/**
+ * 読み上げ対象テキストを受け取り、検証済みのプレーンテキストを返す。
+ * 未指定・空文字は「その言語を要求しない」を意味する（合成は文字数課金のため、
+ * アプリはユーザーが無効にしている言語を送ってこない）。
+ */
+export const parseTtsText = (value: unknown, name: string): string => {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  if (typeof value !== 'string') {
     throw new CallableError(
       'invalid-argument',
-      `The function must be called with one argument "${name}" containing the message to add.`
+      `"${name}" must be a string if provided`
     );
   }
-  return value;
+  // gpt-4o-mini-tts は SSML を解釈せずタグをそのまま読み上げるため、万一
+  // タグが紛れ込んでも読ませない。プレーンテキストには実質作用しない。
+  const stripped = stripSsml(value).trim();
+  if (stripped.length === 0) {
+    return '';
+  }
+
+  const bytes = utf8ByteLength(stripped);
+  if (bytes > TEXT_BYTE_LIMIT) {
+    throw new CallableError(
+      'invalid-argument',
+      `${name} exceeds ${TEXT_BYTE_LIMIT} byte limit (${bytes} bytes)`
+    );
+  }
+  return stripped;
+};
+
+/** 読み方の指示を リクエスト → KV 設定 → 環境変数 の順で解決する。 */
+export const resolveInstructions = (
+  requested: unknown,
+  configured: string | undefined,
+  fallback: string | undefined
+): string => {
+  const value =
+    typeof requested === 'string' && requested.trim().length > 0
+      ? requested.trim()
+      : configured?.trim() || fallback?.trim() || '';
+  if (!value) {
+    return '';
+  }
+  // 上限超過は弾かずに切り詰める。読み方の指示は本文ではないため、
+  // これだけで放送そのものを失敗させる必要はない。
+  return utf8ByteLength(value) > INSTRUCTIONS_BYTE_LIMIT
+    ? value.slice(0, INSTRUCTIONS_BYTE_LIMIT)
+    : value;
 };
 
 export const handleTts = async (
@@ -88,107 +141,96 @@ export const handleTts = async (
 
   const data = await parseCallableData<TtsRequest>(req);
 
-  const ssmlJa = requireString(data.ssmlJa, 'ssmlJa');
-  // 生入力を保持し、バイト数上限は正規化前の値で判定する（正規化での展開/削除で
-  // 本来通る入力を弾いたり、上限超え入力を通したりしないため）。
-  const rawSsmlEn = requireString(data.ssmlEn, 'ssmlEn');
-  const ssmlEn = normalizeRomanText(rawSsmlEn);
-  if (ssmlEn.trim().length === 0) {
+  const textJa = parseTtsText(data.textJa, 'textJa');
+  // 英語は駅名の表記ゆれ（全角記号・略記・長音符・大文字表記）を吸収してから合成する
+  const textEn = normalizeRomanText(parseTtsText(data.textEn, 'textEn')).trim();
+
+  const wantsJa = textJa.length > 0;
+  const wantsEn = textEn.length > 0;
+  if (!wantsJa && !wantsEn) {
     throw new CallableError(
       'invalid-argument',
-      'The function must be called with one argument "ssmlEn" containing the message to add.'
+      'The function must be called with at least one of "textJa" or "textEn" containing the text to speak.'
+    );
+  }
+
+  if (!env.OPENAI_API_KEY) {
+    throw new CallableError(
+      'failed-precondition',
+      'OPENAI_API_KEY is not configured'
     );
   }
 
   const ttsConfig = await getTtsConfig(env);
-  const jaVoiceName = resolveAzureVoiceName(
+  const model = resolveTtsModel(data.model, ttsConfig.model, env.TTS_MODEL);
+  const jaVoiceName = resolveOpenAiVoiceName(
     data.jaVoiceName,
     ttsConfig.jaVoiceName,
     env.TTS_JA_VOICE_NAME
   );
-  const enVoiceName = resolveAzureVoiceName(
+  const enVoiceName = resolveOpenAiVoiceName(
     data.enVoiceName,
     ttsConfig.enVoiceName,
     env.TTS_EN_VOICE_NAME
   );
+  const instructionsJa = resolveInstructions(
+    data.instructionsJa,
+    ttsConfig.instructionsJa,
+    env.TTS_INSTRUCTIONS_JA
+  );
+  const instructionsEn = resolveInstructions(
+    data.instructionsEn,
+    ttsConfig.instructionsEn,
+    env.TTS_INSTRUCTIONS_EN
+  );
 
-  const strippedJa = stripSsml(ssmlJa);
-  const strippedEn = stripSsml(ssmlEn);
-  if (strippedJa.trim().length === 0) {
-    throw new CallableError(
-      'invalid-argument',
-      'ssmlJa contains no visible text after stripping SSML tags'
-    );
-  }
-  if (strippedEn.trim().length === 0) {
-    throw new CallableError(
-      'invalid-argument',
-      'ssmlEn contains no visible text after stripping SSML tags'
-    );
-  }
-
-  const jaTextBytes = utf8ByteLength(strippedJa);
-  const enTextBytes = utf8ByteLength(strippedEn);
-  if (jaTextBytes > TEXT_BYTE_LIMIT) {
-    throw new CallableError(
-      'invalid-argument',
-      `ssmlJa text exceeds ${TEXT_BYTE_LIMIT} byte limit (${jaTextBytes} bytes)`
-    );
-  }
-  if (enTextBytes > TEXT_BYTE_LIMIT) {
-    throw new CallableError(
-      'invalid-argument',
-      `ssmlEn text exceeds ${TEXT_BYTE_LIMIT} byte limit (${enTextBytes} bytes)`
-    );
-  }
-
-  // 可視テキストだけでなく生 SSML のバイト長にも上限を設け、タグ膨張入力を弾く
-  if (
-    utf8ByteLength(ssmlJa) > RAW_SSML_BYTE_LIMIT ||
-    utf8ByteLength(rawSsmlEn) > RAW_SSML_BYTE_LIMIT
-  ) {
-    throw new CallableError(
-      'invalid-argument',
-      `raw SSML exceeds ${RAW_SSML_BYTE_LIMIT} byte limit`
-    );
-  }
-
-  // 合成オプションもキャッシュキーに含める（outputFormat/style/styleDegree/pitch を
-  // 変えたら別の音声になるため、同じ voice:${id} を再利用させない）。
+  // 合成オプションもキャッシュキーに含める（responseFormat/speed を変えたら
+  // 別の音声になるため、同じ voice:${id} を再利用させない）。
   const ttsOptions: TtsOptions = {
-    outputFormat: env.AZURE_TTS_OUTPUT_FORMAT || undefined,
-    style: env.AZURE_TTS_STYLE || undefined,
-    styleDegree: env.AZURE_TTS_STYLE_DEGREE || undefined,
-    pitch: env.AZURE_TTS_PITCH || undefined,
+    responseFormat: env.TTS_RESPONSE_FORMAT || undefined,
+    speed: env.TTS_SPEED || undefined,
   };
 
   const id = await computeId({
     enVoiceName,
+    instructionsEn,
+    instructionsJa,
     jaVoiceName,
-    ssmlEn,
-    ssmlJa,
+    model,
+    textEn,
+    textJa,
     ttsOptions,
   });
 
   // --- キャッシュ照会 ---
+  // id は「どの言語を要求したか」まで含めて決まるため、要求した言語のパスが
+  // 揃っていれば同じ組み合わせの再放送とみなせる。
   const meta = await env.TTS_KV.get<VoiceCacheMeta>(`voice:${id}`, 'json');
-  if (meta?.pathJa && meta.pathEn) {
+  if (meta && (!wantsJa || meta.pathJa) && (!wantsEn || meta.pathEn)) {
     try {
       const [jaObj, enObj] = await Promise.all([
-        env.TTS_BUCKET.get(meta.pathJa),
-        env.TTS_BUCKET.get(meta.pathEn),
+        wantsJa && meta.pathJa ? env.TTS_BUCKET.get(meta.pathJa) : null,
+        wantsEn && meta.pathEn ? env.TTS_BUCKET.get(meta.pathEn) : null,
       ]);
-      if (jaObj && enObj) {
+      if ((!wantsJa || jaObj) && (!wantsEn || enObj)) {
         const [jaBuf, enBuf] = await Promise.all([
-          jaObj.arrayBuffer(),
-          enObj.arrayBuffer(),
+          jaObj ? jaObj.arrayBuffer() : null,
+          enObj ? enObj.arrayBuffer() : null,
         ]);
         return callableSuccess({
           id,
-          jaAudioContent: bytesToBase64(jaBuf),
-          enAudioContent: bytesToBase64(enBuf),
-          jaAudioMimeType: meta.jaAudioMimeType ?? 'audio/mpeg',
-          enAudioMimeType: meta.enAudioMimeType ?? 'audio/mpeg',
+          ...(jaBuf
+            ? {
+                jaAudioContent: bytesToBase64(jaBuf),
+                jaAudioMimeType: meta.jaAudioMimeType ?? 'audio/mpeg',
+              }
+            : {}),
+          ...(enBuf
+            ? {
+                enAudioContent: bytesToBase64(enBuf),
+                enAudioMimeType: meta.enAudioMimeType ?? 'audio/mpeg',
+              }
+            : {}),
         });
       }
     } catch (e) {
@@ -199,25 +241,30 @@ export const handleTts = async (
     }
   }
 
-  // --- 合成（Azure） ---
-  // 音質・スタイル・プロソディは env で調整可能（ttsOptions は上で構築済み）
+  // --- 合成（OpenAI） ---
+  // 要求された言語だけ合成する（合成は文字数課金）
+  const gatewayBaseUrl = env.AI_GATEWAY_BASE_URL || undefined;
   const [jaAudio, enAudio] = await Promise.all([
-    synthesizeSpeech(
-      env.AZURE_SPEECH_REGION,
-      env.AZURE_SPEECH_KEY,
-      ssmlJa,
-      'ja-JP',
-      jaVoiceName,
-      ttsOptions
-    ),
-    synthesizeSpeech(
-      env.AZURE_SPEECH_REGION,
-      env.AZURE_SPEECH_KEY,
-      ssmlEn,
-      'en-US',
-      enVoiceName,
-      ttsOptions
-    ),
+    wantsJa
+      ? synthesizeSpeech({
+          apiKey: env.OPENAI_API_KEY,
+          gatewayBaseUrl,
+          model,
+          voiceName: jaVoiceName,
+          text: textJa,
+          opts: { ...ttsOptions, instructions: instructionsJa || undefined },
+        })
+      : null,
+    wantsEn
+      ? synthesizeSpeech({
+          apiKey: env.OPENAI_API_KEY,
+          gatewayBaseUrl,
+          model,
+          voiceName: enVoiceName,
+          text: textEn,
+          opts: { ...ttsOptions, instructions: instructionsEn || undefined },
+        })
+      : null,
   ]);
 
   // キャッシュ書き込みは非同期（失敗してもユーザー応答に影響させない）。
@@ -226,14 +273,15 @@ export const handleTts = async (
     writeTtsCache(
       {
         id,
-        jaAudioContent: jaAudio.audioContent,
-        enAudioContent: enAudio.audioContent,
-        jaAudioMimeType: jaAudio.mimeType,
-        enAudioMimeType: enAudio.mimeType,
-        ssmlJa,
-        ssmlEn,
-        voiceJa: jaVoiceName,
-        voiceEn: enVoiceName,
+        jaAudioContent: jaAudio?.audioContent,
+        enAudioContent: enAudio?.audioContent,
+        jaAudioMimeType: jaAudio?.mimeType,
+        enAudioMimeType: enAudio?.mimeType,
+        textJa,
+        textEn,
+        model,
+        voiceJa: wantsJa ? jaVoiceName : undefined,
+        voiceEn: wantsEn ? enVoiceName : undefined,
       },
       env
     ).catch((err) => console.error('Failed to cache tts audio:', err))
@@ -241,9 +289,17 @@ export const handleTts = async (
 
   return callableSuccess({
     id,
-    jaAudioContent: jaAudio.audioContent,
-    enAudioContent: enAudio.audioContent,
-    jaAudioMimeType: jaAudio.mimeType,
-    enAudioMimeType: enAudio.mimeType,
+    ...(jaAudio
+      ? {
+          jaAudioContent: jaAudio.audioContent,
+          jaAudioMimeType: jaAudio.mimeType,
+        }
+      : {}),
+    ...(enAudio
+      ? {
+          enAudioContent: enAudio.audioContent,
+          enAudioMimeType: enAudio.mimeType,
+        }
+      : {}),
   });
 };

@@ -8,7 +8,6 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const SECRET_NAMES = [
   'SESSION_JWT_SECRET',
-  'AZURE_SPEECH_KEY',
   'GOOGLE_PLAY_SA_KEY',
   'APPSTORE_CONNECT_KEY',
   'OCTOKIT_PAT',

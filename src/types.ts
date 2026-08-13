@@ -16,10 +16,15 @@ export interface Env {
 
   // --- Vars（非機密。wrangler.jsonc の vars） ---
   GOOGLE_PLAY_PACKAGE_NAME: string;
-  AZURE_SPEECH_REGION: string;
   AI_TRIAGE_MODEL: string;
+  /** 合成に使う OpenAI TTS モデル（例: gpt-4o-mini-tts） */
+  TTS_MODEL: string;
+  /** OpenAI TTS のボイス名（例: nova）。ボイスは多言語対応のため日英で同じ名前を使える */
   TTS_JA_VOICE_NAME: string;
   TTS_EN_VOICE_NAME: string;
+  /** 読み方の指示（gpt-4o-mini-tts の instructions）の既定値 */
+  TTS_INSTRUCTIONS_JA: string;
+  TTS_INSTRUCTIONS_EN: string;
   SESSION_TOKEN_TTL_SECONDS: string;
   UPLOAD_PUBLIC_BASE_URL: string;
   FEW_SHOT_KV_KEY: string;
@@ -42,7 +47,6 @@ export interface Env {
 
   // --- Secrets（wrangler secret put で投入） ---
   SESSION_JWT_SECRET: string;
-  AZURE_SPEECH_KEY: string;
   /** Android Publisher 用 Google サービスアカウント鍵 JSON 文字列 */
   GOOGLE_PLAY_SA_KEY: string;
   /** App Store Connect API 鍵 JSON 文字列 ({keyId, issuerId, privateKey}) */
@@ -58,11 +62,11 @@ export interface Env {
   /** LangSmith の API キー（dev 環境のトレーシング用・任意） */
   LANGSMITH_API_KEY?: string;
 
-  // --- Azure TTS チューニング（任意。未設定なら高音質既定のみ適用） ---
-  AZURE_TTS_OUTPUT_FORMAT?: string;
-  AZURE_TTS_STYLE?: string;
-  AZURE_TTS_STYLE_DEGREE?: string;
-  AZURE_TTS_PITCH?: string;
+  // --- TTS チューニング（任意。未設定なら mp3・等速） ---
+  /** OpenAI TTS の response_format（mp3 / opus / aac / flac / wav / pcm） */
+  TTS_RESPONSE_FORMAT?: string;
+  /** 読み上げ速度（0.25〜4.0） */
+  TTS_SPEED?: string;
 
   // --- 任意のデバッグ変数（未設定可） ---
   REVIEWS_DEBUG?: string;
@@ -71,17 +75,21 @@ export interface Env {
   APPSTORE_APP_ID?: string;
 }
 
-/** TTS キャッシュ書き込みのペイロード（R2+KV へ直接保存。キューは介さない） */
+/**
+ * TTS キャッシュ書き込みのペイロード（R2+KV へ直接保存。キューは介さない）。
+ * 片方の言語だけ合成することがあるため、言語ごとのフィールドは任意。
+ */
 export interface TtsCachePayload {
   id: string;
-  jaAudioContent: string;
-  enAudioContent: string;
-  jaAudioMimeType: string;
-  enAudioMimeType: string;
-  ssmlJa: string;
-  ssmlEn: string;
-  voiceJa: string;
-  voiceEn: string;
+  model: string;
+  jaAudioContent?: string;
+  enAudioContent?: string;
+  jaAudioMimeType?: string;
+  enAudioMimeType?: string;
+  textJa?: string;
+  textEn?: string;
+  voiceJa?: string;
+  voiceEn?: string;
 }
 
 /** feedback-triage キューのメッセージ */
