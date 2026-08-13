@@ -1,7 +1,7 @@
 /**
  * OpenAI TTS のボイス名を扱うユーティリティ。
  *
- * gpt-4o-mini-tts のボイスは固定の名前付きプリセット（`nova` など）で、Azure の
+ * gpt-4o-mini-tts のボイスは固定の名前付きプリセット（`shimmer` など）で、Azure の
  * ような `<locale>-<Name>Neural` 形式ではない。ボイスは多言語対応のため日英で
  * 同じ名前を使える。クライアントから任意文字列が渡るため、未知の名前は
  * そのまま OpenAI へ流さず既定値へ倒す（400 で放送を落とさないため）。
@@ -27,7 +27,7 @@ export const isOpenAiVoiceName = (voiceName: string): boolean =>
 
 // 環境変数の設定ミス（Azure 時代の値の残留など）でも合成を落とさないための
 // 最終フォールバック。ここは検証済みの定数なので必ず OpenAI が受理する。
-export const DEFAULT_TTS_VOICE = 'nova';
+export const DEFAULT_TTS_VOICE = 'shimmer';
 export const DEFAULT_TTS_MODEL = 'gpt-4o-mini-tts';
 
 /**
