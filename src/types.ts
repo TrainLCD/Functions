@@ -19,7 +19,7 @@ export interface Env {
   AI_TRIAGE_MODEL: string;
   /** 合成に使う OpenAI TTS モデル（例: gpt-4o-mini-tts） */
   TTS_MODEL: string;
-  /** OpenAI TTS のボイス名（例: nova）。ボイスは多言語対応のため日英で同じ名前を使える */
+  /** OpenAI TTS のボイス名（例: shimmer）。ボイスは多言語対応だが日英で別のボイスを指定できる */
   TTS_JA_VOICE_NAME: string;
   TTS_EN_VOICE_NAME: string;
   /** 読み方の指示（gpt-4o-mini-tts の instructions）の既定値 */

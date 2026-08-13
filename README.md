@@ -114,8 +114,8 @@ the client sends plain text and steers delivery with `instructions`.
     "textJa": "次は、オオサキです",
     "textEn": "The next station is Osaki, J-Y 24.",
     "model": "gpt-4o-mini-tts",
-    "jaVoiceName": "nova",
-    "enVoiceName": "nova",
+    "jaVoiceName": "shimmer",
+    "enVoiceName": "coral",
     "instructionsJa": "…",
     "instructionsEn": "…"
   }
