@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.23",
+    "@ai-sdk/google-vertex": "^5.0.54",
     "@ai-sdk/openai": "^4.0.23",
     "ai": "^7.0.41",
     "dayjs": "^1.11.9",

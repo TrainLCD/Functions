@@ -9,6 +9,7 @@ module.exports = {
   moduleNameMapper: {
     '^ai$': '<rootDir>/test/stubs/ai-sdk.ts',
     '^@ai-sdk/(anthropic|openai)$': '<rootDir>/test/stubs/ai-sdk-provider.ts',
+    '^@ai-sdk/google-vertex/edge$': '<rootDir>/test/stubs/ai-sdk-provider.ts',
     '^langsmith$': '<rootDir>/test/stubs/langsmith.ts',
     '^langsmith/experimental/vercel$': '<rootDir>/test/stubs/langsmith.ts',
   },
