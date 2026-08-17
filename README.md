@@ -92,10 +92,13 @@ The conversational agent picks its provider from `AGENT_MODEL`, written as
 | `anthropic:<model>`       | Anthropic               | `ANTHROPIC_API_KEY`    |
 | `google:gemini-3.7-flash` | Google Vertex AI        | `GOOGLE_VERTEX_SA_KEY` |
 
-Switching providers is a vars-only change (`wrangler deploy`); no code change is
-needed. When `AI_GATEWAY_BASE_URL` is set, every provider is routed through
-Cloudflare AI Gateway (`/anthropic/v1`, `/openai`, `/google-vertex-ai/v1beta1`)
-with request bodies excluded from the gateway logs.
+Switching providers is a vars-only change (`wrangler deploy`) **as long as that
+provider's secret is already set** — no code change is needed. If it is missing,
+`/agent/chat` fails on every request (the model resolver throws
+`<SECRET> is not configured`), so put the secret in before flipping
+`AGENT_MODEL`. When `AI_GATEWAY_BASE_URL` is set, every provider is routed
+through Cloudflare AI Gateway (`/anthropic/v1`, `/openai`,
+`/google-vertex-ai/v1beta1`) with request bodies excluded from the gateway logs.
 
 Gemini runs on **Vertex AI**, which authenticates with Google Cloud credentials
 (ADC) rather than an API key. Workers have no ADC, so `GOOGLE_VERTEX_SA_KEY`
