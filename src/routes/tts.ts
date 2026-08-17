@@ -1,4 +1,4 @@
-/** POST /tts — OpenAI(gpt-4o-mini-tts) で音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
+/** POST /tts — Google Cloud TTS で音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
 import { verifySessionToken } from '../lib/auth/session';
 import {
   CallableError,
@@ -8,33 +8,39 @@ import {
 import { bytesToBase64, sha256Hex } from '../lib/crypto';
 import {
   normalizeResponseFormat,
+  parsePitch,
   parseSpeed,
   synthesizeSpeech,
   type TtsOptions,
-} from '../lib/openai/tts';
+} from '../lib/google/tts';
 import { writeTtsCache } from '../lib/ttsCache';
 import type { Env } from '../types';
 import { normalizeRomanText } from '../utils/normalize';
-import { stripSsml, truncateToByteLimit, utf8ByteLength } from '../utils/ssml';
-import { resolveOpenAiVoiceName, resolveTtsModel } from '../utils/ttsVoice';
+import { stripSsml, utf8ByteLength } from '../utils/ssml';
+import {
+  languageCodeFromVoiceName,
+  resolveGoogleVoiceName,
+} from '../utils/ttsVoice';
 
+/**
+ * model / instructions* は OpenAI(gpt-4o-mini-tts) 時代のフィールド。Cloud TTS の
+ * Standard 系ボイスにはモデル指定も読み方のプロンプト指示も無いため受け取っても
+ * 使わないが、旧バージョンのアプリが送ってきても壊れないよう型としては残す。
+ */
 interface TtsRequest {
   textJa?: unknown;
   textEn?: unknown;
-  model?: unknown;
   jaVoiceName?: unknown;
   enVoiceName?: unknown;
-  instructionsJa?: unknown;
-  instructionsEn?: unknown;
 }
 
 interface TtsConfig {
-  model?: string;
   jaVoiceName?: string;
   enVoiceName?: string;
-  instructionsJa?: string;
-  instructionsEn?: string;
 }
+
+/** キャッシュメタに残す合成エンジン名（find-tts-cache の表示用）。 */
+const TTS_ENGINE = 'google-cloud-tts';
 
 interface VoiceCacheMeta {
   pathJa?: string;
@@ -44,10 +50,9 @@ interface VoiceCacheMeta {
 }
 
 const TEXT_BYTE_LIMIT = 4000;
-// 読み方の指示は声色の調整用で、長文を受ける必要はない。無制限に受けると
-// リクエストサイズとキャッシュキーが無駄に膨らむため上限を設ける。
-const INSTRUCTIONS_BYTE_LIMIT = 2000;
-const HASH_VERSION = 13;
+// 合成エンジンの入れ替え（OpenAI → Google Cloud TTS）で同じ入力でも音声が変わるため、
+// 旧キャッシュへヒットしないよう版を上げる
+const HASH_VERSION = 14;
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;
@@ -75,10 +80,8 @@ const getTtsConfig = async (env: Env): Promise<TtsConfig> => {
 // キャッシュキーへ含めたい値はすべてトップレベルへ平坦化して渡すこと。
 export const computeId = async (payload: {
   enVoiceName: string;
-  instructionsEn: string;
-  instructionsJa: string;
   jaVoiceName: string;
-  model: string;
+  pitch: number | null;
   responseFormat: string;
   speed: number | null;
   textEn: string;
@@ -104,7 +107,7 @@ export const parseTtsText = (value: unknown, name: string): string => {
       `"${name}" must be a string if provided`
     );
   }
-  // gpt-4o-mini-tts は SSML を解釈せずタグをそのまま読み上げるため、万一
+  // Cloud TTS の input.text は SSML を解釈せずタグをそのまま読み上げるため、万一
   // タグが紛れ込んでも読ませない。プレーンテキストには実質作用しない。
   const stripped = stripSsml(value).trim();
   if (stripped.length === 0) {
@@ -119,24 +122,6 @@ export const parseTtsText = (value: unknown, name: string): string => {
     );
   }
   return stripped;
-};
-
-/** 読み方の指示を リクエスト → KV 設定 → 環境変数 の順で解決する。 */
-export const resolveInstructions = (
-  requested: unknown,
-  configured: string | undefined,
-  fallback: string | undefined
-): string => {
-  const value =
-    typeof requested === 'string' && requested.trim().length > 0
-      ? requested.trim()
-      : configured?.trim() || fallback?.trim() || '';
-  if (!value) {
-    return '';
-  }
-  // 上限超過は弾かずに切り詰める。読み方の指示は本文ではないため、
-  // これだけで放送そのものを失敗させる必要はない。
-  return truncateToByteLimit(value, INSTRUCTIONS_BYTE_LIMIT);
 };
 
 export const handleTts = async (
@@ -161,48 +146,38 @@ export const handleTts = async (
     );
   }
 
-  if (!env.OPENAI_API_KEY) {
+  if (!env.GOOGLE_TTS_SA_KEY) {
     throw new CallableError(
       'failed-precondition',
-      'OPENAI_API_KEY is not configured'
+      'GOOGLE_TTS_SA_KEY is not configured'
     );
   }
 
   const ttsConfig = await getTtsConfig(env);
-  const model = resolveTtsModel(data.model, ttsConfig.model, env.TTS_MODEL);
-  const jaVoiceName = resolveOpenAiVoiceName(
+  const jaVoiceName = resolveGoogleVoiceName(
     data.jaVoiceName,
     ttsConfig.jaVoiceName,
-    env.TTS_JA_VOICE_NAME
+    env.TTS_JA_VOICE_NAME,
+    'ja'
   );
-  const enVoiceName = resolveOpenAiVoiceName(
+  const enVoiceName = resolveGoogleVoiceName(
     data.enVoiceName,
     ttsConfig.enVoiceName,
-    env.TTS_EN_VOICE_NAME
-  );
-  const instructionsJa = resolveInstructions(
-    data.instructionsJa,
-    ttsConfig.instructionsJa,
-    env.TTS_INSTRUCTIONS_JA
-  );
-  const instructionsEn = resolveInstructions(
-    data.instructionsEn,
-    ttsConfig.instructionsEn,
-    env.TTS_INSTRUCTIONS_EN
+    env.TTS_EN_VOICE_NAME,
+    'en'
   );
 
   // 環境変数は文字列なので、送信前に正規化した値を作る。この正規化後の値を
   // そのままキャッシュキーにも使い、設定変更が確実に別 ID になるようにする。
   const responseFormat = normalizeResponseFormat(env.TTS_RESPONSE_FORMAT);
   const speed = parseSpeed(env.TTS_SPEED);
-  const ttsOptions: TtsOptions = { responseFormat, speed };
+  const pitch = parsePitch(env.TTS_PITCH);
+  const ttsOptions: TtsOptions = { responseFormat, speed, pitch };
 
   const id = await computeId({
     enVoiceName,
-    instructionsEn,
-    instructionsJa,
     jaVoiceName,
-    model,
+    pitch: pitch ?? null,
     responseFormat,
     speed: speed ?? null,
     textEn,
@@ -248,28 +223,25 @@ export const handleTts = async (
     }
   }
 
-  // --- 合成（OpenAI） ---
+  // --- 合成（Google Cloud TTS） ---
   // 要求された言語だけ合成する（合成は文字数課金）
-  const gatewayBaseUrl = env.AI_GATEWAY_BASE_URL || undefined;
   const [jaAudio, enAudio] = await Promise.all([
     wantsJa
       ? synthesizeSpeech({
-          apiKey: env.OPENAI_API_KEY,
-          gatewayBaseUrl,
-          model,
+          saKeyJson: env.GOOGLE_TTS_SA_KEY,
+          languageCode: languageCodeFromVoiceName(jaVoiceName),
           voiceName: jaVoiceName,
           text: textJa,
-          opts: { ...ttsOptions, instructions: instructionsJa || undefined },
+          opts: ttsOptions,
         })
       : null,
     wantsEn
       ? synthesizeSpeech({
-          apiKey: env.OPENAI_API_KEY,
-          gatewayBaseUrl,
-          model,
+          saKeyJson: env.GOOGLE_TTS_SA_KEY,
+          languageCode: languageCodeFromVoiceName(enVoiceName),
           voiceName: enVoiceName,
           text: textEn,
-          opts: { ...ttsOptions, instructions: instructionsEn || undefined },
+          opts: ttsOptions,
         })
       : null,
   ]);
@@ -286,7 +258,7 @@ export const handleTts = async (
         enAudioMimeType: enAudio?.mimeType,
         textJa,
         textEn,
-        model,
+        model: TTS_ENGINE,
         voiceJa: wantsJa ? jaVoiceName : undefined,
         voiceEn: wantsEn ? enVoiceName : undefined,
       },

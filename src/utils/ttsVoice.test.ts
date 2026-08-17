@@ -1,102 +1,121 @@
 import {
-  DEFAULT_TTS_MODEL,
   DEFAULT_TTS_VOICE,
-  isOpenAiVoiceName,
-  isTtsModel,
-  resolveOpenAiVoiceName,
-  resolveTtsModel,
+  isGoogleVoiceName,
+  languageCodeFromVoiceName,
+  resolveGoogleVoiceName,
 } from './ttsVoice';
 
-describe('ttsVoice (OpenAI)', () => {
-  it('accepts OpenAI voice presets', () => {
-    expect(isOpenAiVoiceName('nova')).toBe(true);
-    expect(isOpenAiVoiceName('shimmer')).toBe(true);
-    expect(isOpenAiVoiceName('coral')).toBe(true);
-    expect(isOpenAiVoiceName('alloy')).toBe(true);
+describe('isGoogleVoiceName', () => {
+  it('accepts the voice families we allow', () => {
+    expect(isGoogleVoiceName('ja-JP-Standard-B', 'ja')).toBe(true);
+    expect(isGoogleVoiceName('ja-JP-Wavenet-A', 'ja')).toBe(true);
+    expect(isGoogleVoiceName('ja-JP-Neural2-B', 'ja')).toBe(true);
+    expect(isGoogleVoiceName('  en-US-Standard-G  ', 'en')).toBe(true);
   });
 
-  it('accepts voice names case-insensitively and with surrounding spaces', () => {
-    expect(isOpenAiVoiceName('Nova')).toBe(true);
-    expect(isOpenAiVoiceName('  NOVA  ')).toBe(true);
+  it('rejects families that are far more expensive per character', () => {
+    // クライアントに高単価のボイスを名指しさせない
+    expect(isGoogleVoiceName('ja-JP-Chirp3-HD-Aoede', 'ja')).toBe(false);
+    expect(isGoogleVoiceName('en-US-Studio-O', 'en')).toBe(false);
+    expect(isGoogleVoiceName('Kore', 'en')).toBe(false);
   });
 
-  it('rejects unknown voice ids', () => {
-    // Azure/Google 時代のボイス名がそのまま送られてきても弾く
-    expect(isOpenAiVoiceName('ja-JP-NanamiNeural')).toBe(false);
-    expect(isOpenAiVoiceName('ja-JP-Standard-B')).toBe(false);
-    expect(isOpenAiVoiceName('')).toBe(false);
+  it('rejects well-formed but non-existent voices', () => {
+    // 形式だけの検証では通ってしまい、Cloud TTS が
+    // 400 "Voice ... does not exist" を返して /tts が落ちる
+    expect(isGoogleVoiceName('ja-US-Standard-A', 'ja')).toBe(false);
+    expect(isGoogleVoiceName('ja-JP-Standard-Z', 'ja')).toBe(false);
+    // 系統ごとに欠番がある（ja-JP の Neural2 は A、en-US の Neural2 は B が無い）
+    expect(isGoogleVoiceName('ja-JP-Neural2-A', 'ja')).toBe(false);
+    expect(isGoogleVoiceName('en-US-Neural2-B', 'en')).toBe(false);
+    // 実在するが未対応のロケール。使うなら allowlist へ追加する
+    expect(isGoogleVoiceName('en-GB-Standard-A', 'en')).toBe(false);
   });
 
-  it('prefers a valid requested voice', () => {
-    expect(resolveOpenAiVoiceName('shimmer', 'coral', 'nova')).toBe('shimmer');
+  it('rejects a voice whose language does not match the text', () => {
+    // ja のテキストに en のボイスを渡すと Cloud TTS が 400 を返す
+    expect(isGoogleVoiceName('en-US-Standard-G', 'ja')).toBe(false);
+    expect(isGoogleVoiceName('ja-JP-Standard-B', 'en')).toBe(false);
   });
 
-  it('normalizes the resolved voice to lower case', () => {
-    expect(resolveOpenAiVoiceName('Shimmer', 'coral', 'nova')).toBe('shimmer');
-  });
-
-  it('falls back to a configured voice when the request is invalid', () => {
-    expect(resolveOpenAiVoiceName('ja-JP-NanamiNeural', 'coral', 'nova')).toBe(
-      'coral'
-    );
-  });
-
-  it('falls back to the default voice when both inputs are invalid', () => {
-    expect(
-      resolveOpenAiVoiceName('ja-JP-NanamiNeural', 'en-US-JennyNeural', 'nova')
-    ).toBe('nova');
-  });
-
-  it('falls back to the default voice for non-string inputs', () => {
-    expect(resolveOpenAiVoiceName(undefined, undefined, 'nova')).toBe('nova');
-    expect(resolveOpenAiVoiceName(42, {}, 'nova')).toBe('nova');
-  });
-
-  it('validates the env default too, so a stale Azure value never reaches OpenAI', () => {
-    // 環境変数の設定ミスをそのまま送ると OpenAI が 400 を返し /tts が落ちる
-    expect(
-      resolveOpenAiVoiceName(undefined, undefined, 'ja-JP-NanamiNeural')
-    ).toBe(DEFAULT_TTS_VOICE);
-    expect(resolveOpenAiVoiceName(undefined, undefined, '')).toBe(
-      DEFAULT_TTS_VOICE
-    );
+  it('rejects names from the previous engines', () => {
+    expect(isGoogleVoiceName('shimmer', 'ja')).toBe(false);
+    expect(isGoogleVoiceName('ja-JP-NanamiNeural', 'ja')).toBe(false);
+    expect(isGoogleVoiceName('', 'ja')).toBe(false);
   });
 });
 
-describe('resolveTtsModel', () => {
-  it('accepts the allowed TTS models', () => {
-    expect(isTtsModel('gpt-4o-mini-tts')).toBe(true);
-    expect(isTtsModel('tts-1')).toBe(true);
-    expect(isTtsModel('tts-1-hd')).toBe(true);
+describe('languageCodeFromVoiceName', () => {
+  it('derives the locale from the voice name', () => {
+    // voice.name と languageCode の食い違いは 400 になるため名前から導出する
+    expect(languageCodeFromVoiceName('ja-JP-Standard-B')).toBe('ja-JP');
+    expect(languageCodeFromVoiceName('en-GB-Wavenet-A')).toBe('en-GB');
+  });
+});
+
+describe('resolveGoogleVoiceName', () => {
+  it('prefers a valid requested voice', () => {
+    expect(
+      resolveGoogleVoiceName(
+        'ja-JP-Wavenet-A',
+        'ja-JP-Standard-A',
+        'ja-JP-Standard-B',
+        'ja'
+      )
+    ).toBe('ja-JP-Wavenet-A');
   });
 
-  it('rejects models outside the allowlist', () => {
-    // クライアントに高額なモデルを名指しさせない
-    expect(isTtsModel('gpt-4o')).toBe(false);
-    expect(isTtsModel('gpt-5.6-luna')).toBe(false);
-    expect(isTtsModel('')).toBe(false);
-  });
-
-  it('prefers a valid requested model', () => {
-    expect(resolveTtsModel('tts-1-hd', 'tts-1', 'gpt-4o-mini-tts')).toBe(
-      'tts-1-hd'
+  it('falls back to the KV config, then to the env default', () => {
+    expect(
+      resolveGoogleVoiceName(
+        'ja-JP-Chirp3-HD-Aoede',
+        'ja-JP-Standard-A',
+        'ja-JP-Standard-B',
+        'ja'
+      )
+    ).toBe('ja-JP-Standard-A');
+    expect(
+      resolveGoogleVoiceName(undefined, undefined, 'ja-JP-Standard-B', 'ja')
+    ).toBe('ja-JP-Standard-B');
+    expect(resolveGoogleVoiceName(42, {}, 'en-US-Standard-G', 'en')).toBe(
+      'en-US-Standard-G'
     );
   });
 
-  it('falls back through config to the default for disallowed models', () => {
-    expect(resolveTtsModel('gpt-4o', 'tts-1', 'gpt-4o-mini-tts')).toBe('tts-1');
-    expect(resolveTtsModel('gpt-4o', 'gpt-4o', 'gpt-4o-mini-tts')).toBe(
-      'gpt-4o-mini-tts'
+  it('validates the env default too, so a stale OpenAI value never reaches Google', () => {
+    // 環境変数の設定ミスをそのまま送ると Google が 400 を返し /tts が落ちる
+    expect(resolveGoogleVoiceName(undefined, undefined, 'shimmer', 'ja')).toBe(
+      DEFAULT_TTS_VOICE.ja
     );
-    expect(resolveTtsModel(undefined, undefined, 'gpt-4o-mini-tts')).toBe(
-      'gpt-4o-mini-tts'
+    expect(resolveGoogleVoiceName(undefined, undefined, undefined, 'en')).toBe(
+      DEFAULT_TTS_VOICE.en
     );
   });
 
-  it('validates the env default too', () => {
-    expect(resolveTtsModel(undefined, undefined, 'gpt-4o')).toBe(
-      DEFAULT_TTS_MODEL
-    );
-    expect(resolveTtsModel(undefined, undefined, '')).toBe(DEFAULT_TTS_MODEL);
+  it('falls back for well-formed but non-existent voices', () => {
+    // 形式が正しいだけの名前を通すと Cloud TTS が 400 を返す
+    expect(
+      resolveGoogleVoiceName('ja-US-Standard-A', undefined, undefined, 'ja')
+    ).toBe(DEFAULT_TTS_VOICE.ja);
+    expect(
+      resolveGoogleVoiceName('ja-JP-Standard-Z', undefined, undefined, 'ja')
+    ).toBe(DEFAULT_TTS_VOICE.ja);
+  });
+
+  it('has defaults that are themselves allowed voices', () => {
+    // 既定値が allowlist から外れると、全リクエストが 400 になる
+    expect(isGoogleVoiceName(DEFAULT_TTS_VOICE.ja, 'ja')).toBe(true);
+    expect(isGoogleVoiceName(DEFAULT_TTS_VOICE.en, 'en')).toBe(true);
+  });
+
+  it('never returns a voice from the wrong language', () => {
+    expect(
+      resolveGoogleVoiceName(
+        'ja-JP-Standard-B',
+        'ja-JP-Wavenet-A',
+        'ja-JP-Neural2-B',
+        'en'
+      )
+    ).toBe(DEFAULT_TTS_VOICE.en);
   });
 });

@@ -6,7 +6,7 @@ single Worker.
 
 ## Features
 
-- **TTS synthesis** (`POST /tts`): synthesizes plain text into audio via OpenAI `gpt-4o-mini-tts` and caches it in KV/R2.
+- **TTS synthesis** (`POST /tts`): synthesizes plain text into audio via Google Cloud Text-to-Speech and caches it in KV/R2.
 - **Session issuance** (`POST /auth/token`): issues a short-lived session JWT from an install ID (the replacement for Firebase anonymous auth).
 - **Feedback intake** (`POST /postFeedback`): enqueues feedback onto the triage queue.
 - **Image upload** (`POST /feedback/upload-image`): stores feedback images in R2 and returns a public URL.
@@ -22,7 +22,8 @@ single Worker.
 - **R2** — audio binaries and feedback images
 - **Cloudflare Queues** — `feedback-triage`
 - **Workers AI** — feedback triage
-- **OpenAI** — TTS synthesis (`gpt-4o-mini-tts`) and the conversational agent
+- **Google Cloud Text-to-Speech** — TTS synthesis (`Standard` voices, service-account auth)
+- **OpenAI** — the conversational agent
 - **Anthropic / Google Gemini (Vertex AI)** — alternative back ends for the
   conversational agent; the provider is selected by the `AGENT_MODEL` var
 - **Google Android Publisher API** — Google Play review retrieval (service-account JWT)
@@ -63,7 +64,8 @@ wrangler queues create feedback-triage-dev
 ```bash
 wrangler secret put SESSION_JWT_SECRET          # signing key for session JWTs (any long random string)
 wrangler secret put GOOGLE_PLAY_SA_KEY         # Android Publisher SA key JSON (single-line string)
-wrangler secret put OPENAI_API_KEY              # TTS synthesis and the conversational agent
+wrangler secret put OPENAI_API_KEY              # the conversational agent
+wrangler secret put GOOGLE_TTS_SA_KEY           # Cloud Text-to-Speech SA key JSON (for POST /tts)
 wrangler secret put GOOGLE_VERTEX_SA_KEY        # Vertex AI SA key JSON; only when AGENT_MODEL is "google:<model>"
 wrangler secret put OCTOKIT_PAT
 wrangler secret put DISCORD_CS_WEBHOOK_URL
@@ -79,9 +81,16 @@ You can also bulk-load secrets with the helper scripts: copy
 
 ### Non-secret configuration (vars)
 
-See `vars` in `wrangler.jsonc`. Configure the TTS model, voice names, AI model
-name, package name, public upload URL (the R2 public domain), and so on per
-environment.
+See `vars` in `wrangler.jsonc`. Configure the TTS voice names and delivery
+(`TTS_SPEED` / `TTS_PITCH`), AI model name, package name, public upload URL (the
+R2 public domain), and so on per environment.
+
+Synthesis runs on Google Cloud Text-to-Speech, which authenticates with a service
+account rather than an API key: `GOOGLE_TTS_SA_KEY` holds the key JSON and the
+Worker signs a JWT with Web Crypto to obtain an access token. The Cloud
+Text-to-Speech API must be enabled on that project. Unlike the agent providers,
+TTS is not routed through Cloudflare AI Gateway (Cloud TTS is not a supported
+gateway provider).
 
 The conversational agent picks its provider from `AGENT_MODEL`, written as
 `<provider>:<model id>`:
@@ -132,19 +141,17 @@ A session JWT is obtained from `POST /auth/token` (body `{ "installId": "<uuid>"
 
 ### `POST /tts`
 
-Synthesis runs on OpenAI `gpt-4o-mini-tts`, which does **not** interpret SSML —
-the client sends plain text and steers delivery with `instructions`.
+Synthesis runs on Google Cloud Text-to-Speech. The client sends plain text; SSML
+is **not** interpreted (stray tags are stripped server-side rather than read
+aloud), and delivery is steered by the `TTS_SPEED` / `TTS_PITCH` vars.
 
 ```json
 {
   "data": {
     "textJa": "次は、オオサキです",
     "textEn": "The next station is Osaki, J-Y 24.",
-    "model": "gpt-4o-mini-tts",
-    "jaVoiceName": "shimmer",
-    "enVoiceName": "coral",
-    "instructionsJa": "…",
-    "instructionsEn": "…"
+    "jaVoiceName": "ja-JP-Standard-B",
+    "enVoiceName": "en-US-Standard-G"
   }
 }
 ```
@@ -152,9 +159,16 @@ the client sends plain text and steers delivery with `instructions`.
 Every field is optional except that **at least one of `textJa` / `textEn` must
 be present**. Synthesis is billed per character, so the app omits a language the
 user has switched off; only the languages it asks for are synthesized, cached,
-and returned. `model` and the voice names are validated against an allowlist —
-anything unrecognized falls back to the KV config (`config:tts`) and then to the
-`TTS_*` vars, so a client cannot name an arbitrary (expensive) model.
+and returned. Voice names are checked against an allowlist of voices that are
+known to exist (`ja-JP` / `en-US` in the `Standard` / `Wavenet` / `Neural2`
+families) — anything else falls back to the KV config (`config:tts`) and then to
+the `TTS_*` vars. That keeps a client from naming an arbitrary (far more
+expensive) voice such as `Studio`, `Chirp3-HD`, or a Gemini-TTS voice, and also
+keeps a well-formed but non-existent name (`ja-JP-Standard-Z`) from reaching the
+API, where it would fail the whole request with a 400. Using another locale
+means adding its voices to the list in `src/utils/ttsVoice.ts`. The `model` / `instructions*`
+fields of the previous OpenAI-based engine are accepted but ignored, so older
+app builds keep working.
 
 The response carries only the requested languages:
 

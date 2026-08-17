@@ -16,7 +16,7 @@ const createEnv = () => {
 
 const basePayload = {
   id: 'abc123',
-  model: 'gpt-4o-mini-tts',
+  model: 'google-cloud-tts',
   jaAudioContent: 'QQ==',
   enAudioContent: 'QQ==',
   jaAudioMimeType: 'audio/mpeg',
@@ -42,7 +42,7 @@ describe('writeTtsCache', () => {
     expect(meta).toEqual(
       expect.objectContaining({
         id: 'abc123',
-        model: 'gpt-4o-mini-tts',
+        model: 'google-cloud-tts',
         pathJa: 'caches/tts/ja/abc123.mp3',
         pathEn: 'caches/tts/en/abc123.mp3',
         textJa: '次は、オオサキです',
@@ -115,7 +115,7 @@ describe('writeTtsCache', () => {
     await writeTtsCache(
       {
         id: 'abc123',
-        model: 'gpt-4o-mini-tts',
+        model: 'google-cloud-tts',
       },
       env
     );

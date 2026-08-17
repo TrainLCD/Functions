@@ -19,10 +19,16 @@ const SECRET_NAMES = [
   'OPENAI_API_KEY',
   'GOOGLE_VERTEX_SA_KEY',
   'LANGSMITH_API_KEY',
+  // TTS（/tts）
+  'GOOGLE_TTS_SA_KEY',
 ];
 
 /** <NAME>_FILE でファイル内容を投入できるシークレット（サービスアカウント鍵 JSON） */
-const FILE_BACKED_SECRETS = ['GOOGLE_PLAY_SA_KEY', 'GOOGLE_VERTEX_SA_KEY'];
+const FILE_BACKED_SECRETS = [
+  'GOOGLE_PLAY_SA_KEY',
+  'GOOGLE_VERTEX_SA_KEY',
+  'GOOGLE_TTS_SA_KEY',
+];
 
 const [, , secretsFile, outFile] = process.argv;
 if (!outFile) {
@@ -63,8 +69,9 @@ for (const name of FILE_BACKED_SECRETS) {
   const fileKey = `${name}_FILE`;
   const saFile = process.env[fileKey] ?? values[fileKey];
   if (saFile) {
+    let contents;
     try {
-      values[name] = readFileSync(saFile, 'utf8');
+      contents = readFileSync(saFile, 'utf8');
     } catch (e) {
       process.stderr.write(
         `${fileKey} を読めません: ${saFile} (${e.message})\n` +
@@ -72,6 +79,17 @@ for (const name of FILE_BACKED_SECRETS) {
       );
       process.exit(2);
     }
+    // 空ファイルを黙って捨てると「投入対象のシークレットがありません」としか出ず
+    // 原因を追いにくい。失敗した `gcloud ... keys create` は出力先を空のまま残すため、
+    // 鍵ファイルが空になる事故は実際に起こる
+    if (contents.trim().length === 0) {
+      process.stderr.write(
+        `${fileKey} が空です: ${saFile}\n` +
+          '（鍵の発行に失敗していないか確認してください）\n'
+      );
+      process.exit(2);
+    }
+    values[name] = contents;
   }
   // 補助キーは secret として出力しない
   delete values[fileKey];
