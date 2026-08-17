@@ -69,8 +69,9 @@ for (const name of FILE_BACKED_SECRETS) {
   const fileKey = `${name}_FILE`;
   const saFile = process.env[fileKey] ?? values[fileKey];
   if (saFile) {
+    let contents;
     try {
-      values[name] = readFileSync(saFile, 'utf8');
+      contents = readFileSync(saFile, 'utf8');
     } catch (e) {
       process.stderr.write(
         `${fileKey} を読めません: ${saFile} (${e.message})\n` +
@@ -78,6 +79,17 @@ for (const name of FILE_BACKED_SECRETS) {
       );
       process.exit(2);
     }
+    // 空ファイルを黙って捨てると「投入対象のシークレットがありません」としか出ず
+    // 原因を追いにくい。失敗した `gcloud ... keys create` は出力先を空のまま残すため、
+    // 鍵ファイルが空になる事故は実際に起こる
+    if (contents.trim().length === 0) {
+      process.stderr.write(
+        `${fileKey} が空です: ${saFile}\n` +
+          '（鍵の発行に失敗していないか確認してください）\n'
+      );
+      process.exit(2);
+    }
+    values[name] = contents;
   }
   // 補助キーは secret として出力しない
   delete values[fileKey];
