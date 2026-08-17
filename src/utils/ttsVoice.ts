@@ -1,96 +1,73 @@
 /**
- * OpenAI TTS のボイス名を扱うユーティリティ。
+ * Google Cloud TTS のボイス名を扱うユーティリティ。
  *
- * gpt-4o-mini-tts のボイスは固定の名前付きプリセット（`shimmer` など）で、Azure の
- * ような `<locale>-<Name>Neural` 形式ではない。ボイスは多言語対応のため日英で
- * 同じ名前を使える。クライアントから任意文字列が渡るため、未知の名前は
- * そのまま OpenAI へ流さず既定値へ倒す（400 で放送を落とさないため）。
+ * ボイス名は `<言語>-<地域>-<系統>-<記号>`（例: ja-JP-Standard-B）で、Azure と同じく
+ * ロケールを含む。言語ごとに別のボイスを指定する必要があるため、日英で共通の名前は
+ * 使えない（OpenAI の `shimmer` のような多言語プリセットとは異なる）。
+ *
+ * クライアントから任意文字列が渡るため、未知の名前はそのまま Google へ流さず
+ * 既定値へ倒す（400 で放送を落とさないため）。
  */
 
-// OpenAI Audio Speech API が受け付けるボイス。女性寄りは nova / shimmer / coral / sage。
-const OPENAI_VOICES = new Set([
-  'alloy',
-  'ash',
-  'ballad',
-  'coral',
-  'echo',
-  'fable',
-  'nova',
-  'onyx',
-  'sage',
-  'shimmer',
-  'verse',
-]);
+export type TtsLanguage = 'ja' | 'en';
 
-export const isOpenAiVoiceName = (voiceName: string): boolean =>
-  OPENAI_VOICES.has(voiceName.trim().toLowerCase());
+/**
+ * クライアント指定を許すボイス系統。Android の端末内蔵 TTS と同水準の音質を狙う
+ * 系統に限定する。Studio / Chirp3-HD / Gemini-TTS は単価が桁違いで、名指しされると
+ * 課金が膨らむため受け付けない（系統を変えるときは環境変数の既定値ごと入れ替える）。
+ */
+const ALLOWED_VOICE_FAMILIES = ['Standard', 'Wavenet', 'Neural2'] as const;
 
-// 環境変数の設定ミス（Azure 時代の値の残留など）でも合成を落とさないための
-// 最終フォールバック。ここは検証済みの定数なので必ず OpenAI が受理する。
-export const DEFAULT_TTS_VOICE = 'shimmer';
-export const DEFAULT_TTS_MODEL = 'gpt-4o-mini-tts';
+const VOICE_NAME_PATTERN = new RegExp(
+  `^([a-z]{2})-([A-Z]{2})-(?:${ALLOWED_VOICE_FAMILIES.join('|')})-[A-Z]$`
+);
+
+// 環境変数の設定ミス（OpenAI 時代の "shimmer" の残留など）でも合成を落とさない
+// ための最終フォールバック。ここは実在を確認済みの女性ボイス。
+export const DEFAULT_TTS_VOICE: Record<TtsLanguage, string> = {
+  ja: 'ja-JP-Standard-B',
+  en: 'en-US-Standard-G',
+};
+
+/** ボイス名がその言語向けの許可済みボイスか。 */
+export const isGoogleVoiceName = (
+  voiceName: string,
+  language: TtsLanguage
+): boolean => {
+  const matched = VOICE_NAME_PATTERN.exec(voiceName.trim());
+  return matched?.[1] === language;
+};
+
+/**
+ * ボイス名からロケール（languageCode）を取り出す。Cloud TTS は voice.name と
+ * voice.languageCode の食い違いを 400 で弾くため、必ず名前から導出する。
+ */
+export const languageCodeFromVoiceName = (voiceName: string): string =>
+  voiceName.trim().split('-').slice(0, 2).join('-');
 
 /**
  * 使用するボイス名を決める。
  * 優先順位: リクエスト指定 → KV の設定 → 環境変数の既定値。
- * 前二者は妥当なボイス名のときだけ採用する。
+ * いずれも「その言語向けの許可済みボイス」のときだけ採用する。
  */
-export const resolveOpenAiVoiceName = (
+export const resolveGoogleVoiceName = (
   requestedVoiceName: unknown,
   configuredVoiceName: unknown,
-  defaultVoiceName: string
+  defaultVoiceName: string | undefined,
+  language: TtsLanguage
 ): string => {
-  const requested =
-    typeof requestedVoiceName === 'string' ? requestedVoiceName.trim() : '';
-  if (requested && isOpenAiVoiceName(requested)) {
-    return requested.toLowerCase();
+  const candidates = [
+    requestedVoiceName,
+    configuredVoiceName,
+    defaultVoiceName,
+  ];
+  for (const candidate of candidates) {
+    const value = typeof candidate === 'string' ? candidate.trim() : '';
+    // 環境変数由来の既定値も無検証では通さない。不正なら Google が 400 を返し、
+    // /tts 全体が失敗してしまうため、既知のボイスへ倒す。
+    if (value && isGoogleVoiceName(value, language)) {
+      return value;
+    }
   }
-
-  const configured =
-    typeof configuredVoiceName === 'string' ? configuredVoiceName.trim() : '';
-  if (configured && isOpenAiVoiceName(configured)) {
-    return configured.toLowerCase();
-  }
-
-  // 環境変数由来の既定値も無検証で通さない。不正なら OpenAI が 400 を返し、
-  // /tts 全体が失敗してしまうため、既知のボイスへ倒す。
-  const fallback = defaultVoiceName?.trim() ?? '';
-  return fallback && isOpenAiVoiceName(fallback)
-    ? fallback.toLowerCase()
-    : DEFAULT_TTS_VOICE;
-};
-
-// 合成に使ってよいモデル。クライアントの指定をそのまま OpenAI へ流すと、
-// 高額なモデルを名指しされて課金が膨らむため許可制にする。
-const TTS_MODELS = new Set(['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd']);
-
-export const isTtsModel = (model: string): boolean =>
-  TTS_MODELS.has(model.trim().toLowerCase());
-
-/**
- * 使用するモデルを決める。ボイス名と同じく、リクエスト → KV 設定 → 環境変数の
- * 順で、許可済みのモデル名のときだけ採用する。
- */
-export const resolveTtsModel = (
-  requestedModel: unknown,
-  configuredModel: unknown,
-  defaultModel: string
-): string => {
-  const requested =
-    typeof requestedModel === 'string' ? requestedModel.trim() : '';
-  if (requested && isTtsModel(requested)) {
-    return requested.toLowerCase();
-  }
-
-  const configured =
-    typeof configuredModel === 'string' ? configuredModel.trim() : '';
-  if (configured && isTtsModel(configured)) {
-    return configured.toLowerCase();
-  }
-
-  // ボイス名と同様、環境変数由来の既定値も検証してから採用する
-  const fallback = defaultModel?.trim() ?? '';
-  return fallback && isTtsModel(fallback)
-    ? fallback.toLowerCase()
-    : DEFAULT_TTS_MODEL;
+  return DEFAULT_TTS_VOICE[language];
 };

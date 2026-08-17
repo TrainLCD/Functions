@@ -2,7 +2,8 @@
 #
 # Worker のシークレットを `wrangler secret bulk` で一括投入する。
 # 値は KEY=VALUE 形式のファイル（既定: functions/.secrets.env, gitignore 済み）から読む。
-# サービスアカウント鍵（GOOGLE_PLAY_SA_KEY / GOOGLE_VERTEX_SA_KEY）は環境変数
+# サービスアカウント鍵（GOOGLE_PLAY_SA_KEY / GOOGLE_VERTEX_SA_KEY /
+# GOOGLE_TTS_SA_KEY）は環境変数
 # <NAME>_FILE に鍵 JSON のパスを渡せば、その中身をそのまま投入する。
 #
 # stdin パイプ（`echo ... | wrangler secret put`）は Windows/Git Bash で値が
@@ -14,6 +15,7 @@
 #   SECRETS_FILE=.secrets.prod.env ./scripts/put-secrets.sh --env production
 #   GOOGLE_PLAY_SA_KEY_FILE=./sa.json ./scripts/put-secrets.sh
 #   GOOGLE_VERTEX_SA_KEY_FILE=./secrets-vertex-sa.json ./scripts/put-secrets.sh
+#   GOOGLE_TTS_SA_KEY_FILE=./secrets-tts-sa.json ./scripts/put-secrets.sh
 #
 set -euo pipefail
 

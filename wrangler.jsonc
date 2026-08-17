@@ -42,14 +42,16 @@
     "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
     "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
     // --- TTS（/tts）---
-    // gpt-4o-mini-tts は SSML 非対応。声色・速度・間の取り方は instructions で指示する。
-    // 日英とも明るくはっきりした女性声にする。同じボイスでも多言語を読めるが、
-    // 各言語で最も明瞭に聞こえるボイスを選ぶため日英で別のボイスを割り当てている。
-    "TTS_MODEL": "gpt-4o-mini-tts",
-    "TTS_JA_VOICE_NAME": "shimmer",
-    "TTS_EN_VOICE_NAME": "coral",
-    "TTS_INSTRUCTIONS_JA": "鉄道の車内自動放送のアナウンサーとして、明るくはっきりとした女性の声で読み上げてください。トーンはやや高めに保ち、語尾まで明瞭に発音します。テンポはかなり速く、ラッシュ時の自動放送のように急いで一気に読み進めてください。句読点でも文の切れ目でもほとんど間を取らず、詰めて続けます。語尾や伸ばす音を長く引かないでください。速くても駅名や路線名は一語ずつくっきりと発音し、案内らしい張りのある調子にしてください。",
-    "TTS_INSTRUCTIONS_EN": "Read this as an automated train announcement in a bright, clear female voice. Keep the pitch slightly high and the delivery crisp and articulate. Speak fast — much quicker than normal narration, with the urgency of a rush-hour announcement — and push straight through without dragging. Take almost no pause at commas or sentence breaks, and do not draw out word endings. Even at that speed, pronounce station and line names distinctly, and sound professional and welcoming rather than flat.",
+    // Google Cloud TTS。ボイス名はロケール込みで、日英それぞれに指定する。
+    // 既定は旧 Google TTS 実装（Firebase Functions 時代）と同じ組み合わせ。
+    // Standard 系は端末内蔵 TTS と同水準の音質で単価も最安。より高品質にするなら
+    // 末尾記号はそのまま Wavenet / Neural2 へ差し替える（例: ja-JP-Wavenet-B）。
+    // 読み方のプロンプト指示は Standard 系に無いため、速さは TTS_SPEED
+    // （speakingRate）、高さは TTS_PITCH で調整する。
+    "TTS_JA_VOICE_NAME": "ja-JP-Standard-B",
+    "TTS_EN_VOICE_NAME": "en-US-Standard-G",
+    // 車内自動放送らしく早口寄りにする（1.0 が等速。旧実装は無指定＝1.0 だった）
+    "TTS_SPEED": "1.15",
     "SESSION_TOKEN_TTL_SECONDS": "3600",
     "UPLOAD_PUBLIC_BASE_URL": "https://uploads-dev.trainlcd.app",
     "FEW_SHOT_KV_KEY": "config:fewshot",
@@ -78,7 +80,8 @@
   // secrets（`wrangler secret put <NAME>` で投入。コミットしない）:
   //   SESSION_JWT_SECRET / GOOGLE_PLAY_SA_KEY / APPSTORE_CONNECT_KEY /
   //   OCTOKIT_PAT / DISCORD_CS_WEBHOOK_URL / DISCORD_CRASH_WEBHOOK_URL / DISCORD_REVIEW_WEBHOOK_URL /
-  //   ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_VERTEX_SA_KEY / LANGSMITH_API_KEY
+  //   ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_VERTEX_SA_KEY / LANGSMITH_API_KEY /
+  //   GOOGLE_TTS_SA_KEY
 
   "env": {
     "production": {
@@ -108,11 +111,10 @@
         "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
         "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
         // --- TTS（/tts）---
-        "TTS_MODEL": "gpt-4o-mini-tts",
-        "TTS_JA_VOICE_NAME": "shimmer",
-        "TTS_EN_VOICE_NAME": "coral",
-        "TTS_INSTRUCTIONS_JA": "鉄道の車内自動放送のアナウンサーとして、明るくはっきりとした女性の声で読み上げてください。トーンはやや高めに保ち、語尾まで明瞭に発音します。やや速めの一定の速さで、句読点では短く間を取ります。駅名や路線名は一語ずつくっきりと発音し、案内らしい張りのある調子にしてください。",
-        "TTS_INSTRUCTIONS_EN": "Read this as an automated train announcement in a bright, clear female voice. Keep the pitch slightly high and the delivery crisp and articulate, at a steady, slightly brisk pace. Pause briefly at commas and pronounce station and line names distinctly. Sound professional and welcoming rather than flat.",
+        // Google Cloud TTS。本番は dev より控えめの「やや速め」に合わせる
+        "TTS_JA_VOICE_NAME": "ja-JP-Standard-B",
+        "TTS_EN_VOICE_NAME": "en-US-Standard-G",
+        "TTS_SPEED": "1.1",
         "SESSION_TOKEN_TTL_SECONDS": "3600",
         "UPLOAD_PUBLIC_BASE_URL": "https://uploads.trainlcd.app",
         "FEW_SHOT_KV_KEY": "config:fewshot",

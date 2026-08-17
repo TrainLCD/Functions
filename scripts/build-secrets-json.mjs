@@ -19,10 +19,16 @@ const SECRET_NAMES = [
   'OPENAI_API_KEY',
   'GOOGLE_VERTEX_SA_KEY',
   'LANGSMITH_API_KEY',
+  // TTS（/tts）
+  'GOOGLE_TTS_SA_KEY',
 ];
 
 /** <NAME>_FILE でファイル内容を投入できるシークレット（サービスアカウント鍵 JSON） */
-const FILE_BACKED_SECRETS = ['GOOGLE_PLAY_SA_KEY', 'GOOGLE_VERTEX_SA_KEY'];
+const FILE_BACKED_SECRETS = [
+  'GOOGLE_PLAY_SA_KEY',
+  'GOOGLE_VERTEX_SA_KEY',
+  'GOOGLE_TTS_SA_KEY',
+];
 
 const [, , secretsFile, outFile] = process.argv;
 if (!outFile) {

@@ -17,14 +17,12 @@ export interface Env {
   // --- Vars（非機密。wrangler.jsonc の vars） ---
   GOOGLE_PLAY_PACKAGE_NAME: string;
   AI_TRIAGE_MODEL: string;
-  /** 合成に使う OpenAI TTS モデル（例: gpt-4o-mini-tts） */
-  TTS_MODEL: string;
-  /** OpenAI TTS のボイス名（例: shimmer）。ボイスは多言語対応だが日英で別のボイスを指定できる */
+  /**
+   * Google Cloud TTS のボイス名（例: ja-JP-Standard-B）。ロケールを含むため
+   * 日英で別々に指定する。Standard / Wavenet / Neural2 のみ受け付ける
+   */
   TTS_JA_VOICE_NAME: string;
   TTS_EN_VOICE_NAME: string;
-  /** 読み方の指示（gpt-4o-mini-tts の instructions）の既定値 */
-  TTS_INSTRUCTIONS_JA: string;
-  TTS_INSTRUCTIONS_EN: string;
   SESSION_TOKEN_TTL_SECONDS: string;
   UPLOAD_PUBLIC_BASE_URL: string;
   FEW_SHOT_KV_KEY: string;
@@ -69,14 +67,18 @@ export interface Env {
    * アカウント認証のため。ロールは Vertex AI User 相当）
    */
   GOOGLE_VERTEX_SA_KEY?: string;
+  /** Cloud TTS（/tts）用の Google サービスアカウント鍵 JSON 文字列 */
+  GOOGLE_TTS_SA_KEY?: string;
   /** LangSmith の API キー（dev 環境のトレーシング用・任意） */
   LANGSMITH_API_KEY?: string;
 
-  // --- TTS チューニング（任意。未設定なら mp3・等速） ---
-  /** OpenAI TTS の response_format（mp3 / opus / aac / flac / wav / pcm） */
+  // --- TTS チューニング（任意。未設定なら mp3・等速・標準の高さ） ---
+  /** Cloud TTS の audioEncoding に対応する形式（mp3 / wav / opus） */
   TTS_RESPONSE_FORMAT?: string;
-  /** 読み上げ速度（0.25〜4.0） */
+  /** 読み上げ速度（speakingRate。0.25〜4.0） */
   TTS_SPEED?: string;
+  /** 声の高さ（pitch。-20.0〜20.0 セミトーン） */
+  TTS_PITCH?: string;
 
   // --- 任意のデバッグ変数（未設定可） ---
   REVIEWS_DEBUG?: string;
