@@ -121,7 +121,7 @@
         "FEW_SHOT_LIMIT": "12",
         "FEW_SHOT_PER_EX_MAX": "800",
         // --- AI エージェント（/agent/chat）---
-        "AGENT_MODEL": "openai:gpt-5.6-luna",
+        "AGENT_MODEL": "google:gemini-3.7-flash",
         "GOOGLE_VERTEX_LOCATION": "global",
         "AGENT_GATE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
         "AGENT_FAQ_KV_KEY": "config:agent-faq",
