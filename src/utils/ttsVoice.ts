@@ -12,15 +12,68 @@
 export type TtsLanguage = 'ja' | 'en';
 
 /**
- * クライアント指定を許すボイス系統。Android の端末内蔵 TTS と同水準の音質を狙う
- * 系統に限定する。Studio / Chirp3-HD / Gemini-TTS は単価が桁違いで、名指しされると
- * 課金が膨らむため受け付けない（系統を変えるときは環境変数の既定値ごと入れ替える）。
+ * 使用を許すボイス名（`voices.list` で実在を確認済み）。
+ *
+ * 形式（`<言語>-<地域>-<系統>-<記号>`）だけを検証すると `ja-US-Standard-A` や
+ * `ja-JP-Standard-Z` のような実在しない名前を通してしまい、Cloud TTS が
+ * 400（"Voice ... does not exist"）を返して放送そのものが落ちる。既定値へ倒す
+ * ためには実在する名前だけを許可する必要がある。
+ *
+ * 系統は Standard / Wavenet / Neural2 に限定する。Android の端末内蔵 TTS と
+ * 同水準の音質を狙う系統で、Studio / Chirp3-HD / Gemini-TTS は単価が桁違いなので
+ * 名指しされても受け付けない。
+ *
+ * ロケールは実際に使う ja-JP / en-US のみ。他ロケール（en-GB など）や Google が
+ * 後から追加したボイスを使うときは、`voices.list` で実在を確認してここへ足す。
  */
-const ALLOWED_VOICE_FAMILIES = ['Standard', 'Wavenet', 'Neural2'] as const;
-
-const VOICE_NAME_PATTERN = new RegExp(
-  `^([a-z]{2})-([A-Z]{2})-(?:${ALLOWED_VOICE_FAMILIES.join('|')})-[A-Z]$`
-);
+const ALLOWED_VOICES: Record<TtsLanguage, ReadonlySet<string>> = {
+  ja: new Set([
+    'ja-JP-Standard-A',
+    'ja-JP-Standard-B',
+    'ja-JP-Standard-C',
+    'ja-JP-Standard-D',
+    'ja-JP-Wavenet-A',
+    'ja-JP-Wavenet-B',
+    'ja-JP-Wavenet-C',
+    'ja-JP-Wavenet-D',
+    // Neural2 の ja-JP は A が無い
+    'ja-JP-Neural2-B',
+    'ja-JP-Neural2-C',
+    'ja-JP-Neural2-D',
+  ]),
+  en: new Set([
+    'en-US-Standard-A',
+    'en-US-Standard-B',
+    'en-US-Standard-C',
+    'en-US-Standard-D',
+    'en-US-Standard-E',
+    'en-US-Standard-F',
+    'en-US-Standard-G',
+    'en-US-Standard-H',
+    'en-US-Standard-I',
+    'en-US-Standard-J',
+    'en-US-Wavenet-A',
+    'en-US-Wavenet-B',
+    'en-US-Wavenet-C',
+    'en-US-Wavenet-D',
+    'en-US-Wavenet-E',
+    'en-US-Wavenet-F',
+    'en-US-Wavenet-G',
+    'en-US-Wavenet-H',
+    'en-US-Wavenet-I',
+    'en-US-Wavenet-J',
+    // Neural2 の en-US は B が無い
+    'en-US-Neural2-A',
+    'en-US-Neural2-C',
+    'en-US-Neural2-D',
+    'en-US-Neural2-E',
+    'en-US-Neural2-F',
+    'en-US-Neural2-G',
+    'en-US-Neural2-H',
+    'en-US-Neural2-I',
+    'en-US-Neural2-J',
+  ]),
+};
 
 // 環境変数の設定ミス（OpenAI 時代の "shimmer" の残留など）でも合成を落とさない
 // ための最終フォールバック。ここは実在を確認済みの女性ボイス。
@@ -33,10 +86,7 @@ export const DEFAULT_TTS_VOICE: Record<TtsLanguage, string> = {
 export const isGoogleVoiceName = (
   voiceName: string,
   language: TtsLanguage
-): boolean => {
-  const matched = VOICE_NAME_PATTERN.exec(voiceName.trim());
-  return matched?.[1] === language;
-};
+): boolean => ALLOWED_VOICES[language].has(voiceName.trim());
 
 /**
  * ボイス名からロケール（languageCode）を取り出す。Cloud TTS は voice.name と

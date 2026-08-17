@@ -10,8 +10,7 @@ describe('isGoogleVoiceName', () => {
     expect(isGoogleVoiceName('ja-JP-Standard-B', 'ja')).toBe(true);
     expect(isGoogleVoiceName('ja-JP-Wavenet-A', 'ja')).toBe(true);
     expect(isGoogleVoiceName('ja-JP-Neural2-B', 'ja')).toBe(true);
-    expect(isGoogleVoiceName('en-US-Standard-G', 'en')).toBe(true);
-    expect(isGoogleVoiceName('  en-GB-Standard-A  ', 'en')).toBe(true);
+    expect(isGoogleVoiceName('  en-US-Standard-G  ', 'en')).toBe(true);
   });
 
   it('rejects families that are far more expensive per character', () => {
@@ -19,6 +18,18 @@ describe('isGoogleVoiceName', () => {
     expect(isGoogleVoiceName('ja-JP-Chirp3-HD-Aoede', 'ja')).toBe(false);
     expect(isGoogleVoiceName('en-US-Studio-O', 'en')).toBe(false);
     expect(isGoogleVoiceName('Kore', 'en')).toBe(false);
+  });
+
+  it('rejects well-formed but non-existent voices', () => {
+    // 形式だけの検証では通ってしまい、Cloud TTS が
+    // 400 "Voice ... does not exist" を返して /tts が落ちる
+    expect(isGoogleVoiceName('ja-US-Standard-A', 'ja')).toBe(false);
+    expect(isGoogleVoiceName('ja-JP-Standard-Z', 'ja')).toBe(false);
+    // 系統ごとに欠番がある（ja-JP の Neural2 は A、en-US の Neural2 は B が無い）
+    expect(isGoogleVoiceName('ja-JP-Neural2-A', 'ja')).toBe(false);
+    expect(isGoogleVoiceName('en-US-Neural2-B', 'en')).toBe(false);
+    // 実在するが未対応のロケール。使うなら allowlist へ追加する
+    expect(isGoogleVoiceName('en-GB-Standard-A', 'en')).toBe(false);
   });
 
   it('rejects a voice whose language does not match the text', () => {
@@ -79,6 +90,22 @@ describe('resolveGoogleVoiceName', () => {
     expect(resolveGoogleVoiceName(undefined, undefined, undefined, 'en')).toBe(
       DEFAULT_TTS_VOICE.en
     );
+  });
+
+  it('falls back for well-formed but non-existent voices', () => {
+    // 形式が正しいだけの名前を通すと Cloud TTS が 400 を返す
+    expect(
+      resolveGoogleVoiceName('ja-US-Standard-A', undefined, undefined, 'ja')
+    ).toBe(DEFAULT_TTS_VOICE.ja);
+    expect(
+      resolveGoogleVoiceName('ja-JP-Standard-Z', undefined, undefined, 'ja')
+    ).toBe(DEFAULT_TTS_VOICE.ja);
+  });
+
+  it('has defaults that are themselves allowed voices', () => {
+    // 既定値が allowlist から外れると、全リクエストが 400 になる
+    expect(isGoogleVoiceName(DEFAULT_TTS_VOICE.ja, 'ja')).toBe(true);
+    expect(isGoogleVoiceName(DEFAULT_TTS_VOICE.en, 'en')).toBe(true);
   });
 
   it('never returns a voice from the wrong language', () => {

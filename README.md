@@ -159,11 +159,14 @@ aloud), and delivery is steered by the `TTS_SPEED` / `TTS_PITCH` vars.
 Every field is optional except that **at least one of `textJa` / `textEn` must
 be present**. Synthesis is billed per character, so the app omits a language the
 user has switched off; only the languages it asks for are synthesized, cached,
-and returned. Voice names are validated against an allowlist (the `Standard` /
-`Wavenet` / `Neural2` families for the matching language) — anything
-unrecognized falls back to the KV config (`config:tts`) and then to the `TTS_*`
-vars, so a client cannot name an arbitrary (far more expensive) voice such as
-`Studio`, `Chirp3-HD`, or a Gemini-TTS voice. The `model` / `instructions*`
+and returned. Voice names are checked against an allowlist of voices that are
+known to exist (`ja-JP` / `en-US` in the `Standard` / `Wavenet` / `Neural2`
+families) — anything else falls back to the KV config (`config:tts`) and then to
+the `TTS_*` vars. That keeps a client from naming an arbitrary (far more
+expensive) voice such as `Studio`, `Chirp3-HD`, or a Gemini-TTS voice, and also
+keeps a well-formed but non-existent name (`ja-JP-Standard-Z`) from reaching the
+API, where it would fail the whole request with a 400. Using another locale
+means adding its voices to the list in `src/utils/ttsVoice.ts`. The `model` / `instructions*`
 fields of the previous OpenAI-based engine are accepted but ignored, so older
 app builds keep working.
 
