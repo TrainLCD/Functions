@@ -20,7 +20,11 @@ import {
 } from '../lib/callable';
 import type { Env } from '../types';
 import { classifyTopic } from './gate';
-import { resolveAgentModel, resolveOpenAIReasoningOptions } from './llm';
+import {
+  resolveAgentModel,
+  resolveGoogleReasoningSetting,
+  resolveOpenAIReasoningOptions,
+} from './llm';
 import { buildContextMessage, buildSystemPrompt, loadAgentFaq } from './prompt';
 import {
   type AgentChatResult,
@@ -316,6 +320,7 @@ export const runAgentTurn = async (
   const verified = new Map<number, StationSuggestion>();
   const budget = { remaining: MAX_TOOL_CALLS_PER_TURN };
   const openaiReasoning = resolveOpenAIReasoningOptions(params.model);
+  const googleReasoning = resolveGoogleReasoningSetting(params.model);
 
   const result = await params.streamText({
     model: params.model,
@@ -357,6 +362,11 @@ export const runAgentTurn = async (
       // 送るため、'none' 対応が確認できるモデル以外では指定自体を省略する
       ...(openaiReasoning ? { openai: openaiReasoning } : {}),
     },
+    // Gemini の思考抑制だけは providerOptions ではなく AI SDK 共通の reasoning 設定で
+    // 指定する。世代ごとに送るパラメータ（thinkingLevel / thinkingBudget）も
+    // 受理される最小値も異なるため、その解決は llm.ts と SDK に任せる
+    // （google 以外のモデルでは付けない）
+    ...(googleReasoning ? { reasoning: googleReasoning } : {}),
     timeout: { stepMs: LLM_CALL_TIMEOUT_MS },
     abortSignal: params.signal,
     // LLM 呼び出しはコスト重複を避けるため自動再試行しない（設計値）

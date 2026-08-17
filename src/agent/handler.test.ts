@@ -354,6 +354,29 @@ describe('runAgentTurn', () => {
     expect(streamText.mock.calls[1][0].providerOptions).toEqual({
       anthropic: { thinking: { type: 'disabled' } },
     });
+    // reasoning 設定は Gemini 専用（他社モデルでは付けない）
+    expect(streamText.mock.calls[0][0].reasoning).toBeUndefined();
+    expect(streamText.mock.calls[1][0].reasoning).toBeUndefined();
+  });
+
+  it('Gemini の思考は AI SDK 共通の reasoning 設定で抑制する', async () => {
+    const streamText: AnyFn = jest.fn(async () =>
+      streamResult({ output: { reply: 'ok', suggestions: [] } })
+    );
+    await runAgentTurn({
+      ...baseParams,
+      model: 'gemini-3.7-flash' as AnyFn,
+      streamText,
+      searchStations: jest.fn(),
+    });
+
+    const options = streamText.mock.calls[0][0];
+    // 3 系が受理する最小値（thinkingLevel: low 相当）
+    expect(options.reasoning).toBe('low');
+    // thinkingLevel / thinkingBudget の出し分けは SDK に任せ、自前では組まない
+    expect(options.providerOptions).toEqual({
+      anthropic: { thinking: { type: 'disabled' } },
+    });
   });
 });
 

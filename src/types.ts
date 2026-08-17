@@ -30,7 +30,7 @@ export interface Env {
   FEW_SHOT_KV_KEY: string;
   FEW_SHOT_LIMIT: string;
   FEW_SHOT_PER_EX_MAX: string;
-  /** 対話本体モデル（"anthropic:<model>" | "openai:<model>"） */
+  /** 対話本体モデル（"anthropic:<model>" | "openai:<model>" | "google:<model>"） */
   AGENT_MODEL: string;
   /** トピックゲート用の Workers AI モデル */
   AGENT_GATE_MODEL: string;
@@ -40,6 +40,10 @@ export interface Env {
   AGENT_DAILY_TURN_LIMIT: string;
   /** Cloudflare AI Gateway のベース URL（空なら各社 API 直行） */
   AI_GATEWAY_BASE_URL?: string;
+  /** Vertex AI のプロジェクト ID（未設定なら GOOGLE_VERTEX_SA_KEY の project_id） */
+  GOOGLE_VERTEX_PROJECT?: string;
+  /** Vertex AI のロケーション（既定 "global"。例: asia-northeast1） */
+  GOOGLE_VERTEX_LOCATION?: string;
   /** Service Binding 不使用時の sapi-bff GraphQL エンドポイント */
   SAPI_BFF_GRAPHQL_URL?: string;
   /** "true" で LangSmith トレーシングを有効化（dev 環境のみ設定すること） */
@@ -59,6 +63,12 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   /** 対話本体（GPT）の API キー。AGENT_MODEL が openai: のとき必須 */
   OPENAI_API_KEY?: string;
+  /**
+   * 対話本体（Gemini / Vertex AI）用の Google サービスアカウント鍵 JSON 文字列。
+   * AGENT_MODEL が google: のとき必須（Vertex AI は API キーではなくサービス
+   * アカウント認証のため。ロールは Vertex AI User 相当）
+   */
+  GOOGLE_VERTEX_SA_KEY?: string;
   /** LangSmith の API キー（dev 環境のトレーシング用・任意） */
   LANGSMITH_API_KEY?: string;
 

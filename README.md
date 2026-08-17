@@ -23,6 +23,8 @@ single Worker.
 - **Cloudflare Queues** — `feedback-triage`
 - **Workers AI** — feedback triage
 - **OpenAI** — TTS synthesis (`gpt-4o-mini-tts`) and the conversational agent
+- **Anthropic / Google Gemini (Vertex AI)** — alternative back ends for the
+  conversational agent; the provider is selected by the `AGENT_MODEL` var
 - **Google Android Publisher API** — Google Play review retrieval (service-account JWT)
 - **TypeScript / Biome / Jest / Wrangler**
 
@@ -62,6 +64,7 @@ wrangler queues create feedback-triage-dev
 wrangler secret put SESSION_JWT_SECRET          # signing key for session JWTs (any long random string)
 wrangler secret put GOOGLE_PLAY_SA_KEY         # Android Publisher SA key JSON (single-line string)
 wrangler secret put OPENAI_API_KEY              # TTS synthesis and the conversational agent
+wrangler secret put GOOGLE_VERTEX_SA_KEY        # Vertex AI SA key JSON; only when AGENT_MODEL is "google:<model>"
 wrangler secret put OCTOKIT_PAT
 wrangler secret put DISCORD_CS_WEBHOOK_URL
 wrangler secret put DISCORD_CRASH_WEBHOOK_URL
@@ -79,6 +82,30 @@ You can also bulk-load secrets with the helper scripts: copy
 See `vars` in `wrangler.jsonc`. Configure the TTS model, voice names, AI model
 name, package name, public upload URL (the R2 public domain), and so on per
 environment.
+
+The conversational agent picks its provider from `AGENT_MODEL`, written as
+`<provider>:<model id>`:
+
+| `AGENT_MODEL`             | Provider                | Required secret        |
+| ------------------------- | ----------------------- | ---------------------- |
+| `openai:gpt-5.6-luna`     | OpenAI                  | `OPENAI_API_KEY`       |
+| `anthropic:<model>`       | Anthropic               | `ANTHROPIC_API_KEY`    |
+| `google:gemini-3.7-flash` | Google Vertex AI        | `GOOGLE_VERTEX_SA_KEY` |
+
+Switching providers is a vars-only change (`wrangler deploy`) **as long as that
+provider's secret is already set** — no code change is needed. If it is missing,
+`/agent/chat` fails on every request (the model resolver throws
+`<SECRET> is not configured`), so put the secret in before flipping
+`AGENT_MODEL`. When `AI_GATEWAY_BASE_URL` is set, every provider is routed
+through Cloudflare AI Gateway (`/anthropic/v1`, `/openai`,
+`/google-vertex-ai/v1beta1`) with request bodies excluded from the gateway logs.
+
+Gemini runs on **Vertex AI**, which authenticates with Google Cloud credentials
+(ADC) rather than an API key. Workers have no ADC, so `GOOGLE_VERTEX_SA_KEY`
+holds a service-account key JSON (role: *Vertex AI User*) and the Worker signs a
+JWT with Web Crypto to obtain an access token per request. Two optional vars go
+with it: `GOOGLE_VERTEX_PROJECT` (defaults to the key's `project_id`) and
+`GOOGLE_VERTEX_LOCATION` (defaults to `global`).
 
 ## Develop & deploy
 
