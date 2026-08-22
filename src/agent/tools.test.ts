@@ -140,6 +140,22 @@ describe('searchStationsByName', () => {
     });
   });
 
+  it('STATION_API があれば優先し、サブドメイン直下へ POST する', async () => {
+    const stationApiFetch = jest
+      .fn()
+      .mockResolvedValue(gqlResponse([gqlStation(1)]));
+    const bffFetch = jest.fn();
+    const env = {
+      STATION_API: { fetch: stationApiFetch },
+      SAPI_BFF: { fetch: bffFetch },
+    } as unknown as Env;
+    const result = await searchStationsByName(env, '鎌倉', undefined);
+    expect(result[0].stationId).toBe(1);
+    expect(bffFetch).not.toHaveBeenCalled();
+    expect(stationApiFetch.mock.calls[0][0]).toBe('https://stationapi/');
+    expect(stationApiFetch.mock.calls[0][1].method).toBe('POST');
+  });
+
   it('失敗時に 1 回だけ再試行する', async () => {
     const fetchMock = jest
       .fn()

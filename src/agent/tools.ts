@@ -1,7 +1,7 @@
 /**
- * 駅検索ツール — sapi-bff（BFF ルートワーカー）の GraphQL stationsByName で
- * 駅名の実在確認を行う。Service Binding（SAPI_BFF）を優先し、
- * 未設定なら SAPI_BFF_GRAPHQL_URL への fetch にフォールバックする。
+ * 駅検索ツール — stationapi の GraphQL stationsByName で
+ * 駅名の実在確認を行う。Service Binding（STATION_API、未移行の環境は SAPI_BFF）を
+ * 優先し、未設定なら SAPI_BFF_GRAPHQL_URL への fetch にフォールバックする。
  * 検索結果は verified マップへ蓄積し、最終応答のサーバ側検証
  * （validate.ts の sanitizeSuggestions）の突合元になる。
  */
@@ -15,12 +15,12 @@ import {
 
 /** stationsByName へ渡す件数（設計値。全量を返すとツール結果でトークンを浪費する） */
 const STATION_SEARCH_LIMIT = 10;
-/** sapi-bff 呼び出しの 1 試行あたり期限 */
+/** 駅検索 API 呼び出しの 1 試行あたり期限 */
 const TOOL_TIMEOUT_MS = 5_000;
 /** 1 ターン合計のツール呼び出し上限 */
 export const MAX_TOOL_CALLS_PER_TURN = 5;
 /**
- * ツール 1 回あたりの sapi-bff 呼び出し上限（表記ゆれ候補 + 一過性エラーの再試行の合計）。
+ * ツール 1 回あたりの駅検索 API 呼び出し上限（表記ゆれ候補 + 一過性エラーの再試行の合計）。
  * 1 試行 5 秒のため、全体 25 秒の予算内に収まる値にする。
  */
 const MAX_SEARCH_ATTEMPTS = 3;
@@ -102,6 +102,11 @@ const postGraphQL = async (
     body,
     signal,
   };
+  if (env.STATION_API) {
+    // Service Binding はホスト名を解決しないため URL はダミーでよい。
+    // stationapi は GraphQL をサブドメイン直下（POST /）で受ける
+    return env.STATION_API.fetch('https://stationapi/', init);
+  }
   if (env.SAPI_BFF) {
     // Service Binding はホスト名を解決しないため URL はダミーでよい
     return env.SAPI_BFF.fetch('https://sapi-bff/graphql', init);
@@ -109,7 +114,9 @@ const postGraphQL = async (
   if (env.SAPI_BFF_GRAPHQL_URL) {
     return fetch(env.SAPI_BFF_GRAPHQL_URL, init);
   }
-  throw new Error('SAPI_BFF binding or SAPI_BFF_GRAPHQL_URL is required');
+  throw new Error(
+    'STATION_API / SAPI_BFF binding or SAPI_BFF_GRAPHQL_URL is required'
+  );
 };
 
 const queryStationsOnce = async (
@@ -341,7 +348,7 @@ export interface StationSearchToolResult {
 }
 
 export interface StationSearchToolOptions {
-  /** 駅名 → 実在駅リスト（sapi-bff 呼び出し。テストでは差し替え可能） */
+  /** 駅名 → 実在駅リスト（駅検索 API 呼び出し。テストでは差し替え可能） */
   search: (name: string) => Promise<StationSuggestion[]>;
   /** このターンで実在確認済みの駅（stationId → 駅）。突合検証の元データ */
   verified: Map<number, StationSuggestion>;
