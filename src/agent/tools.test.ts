@@ -153,6 +153,7 @@ describe('searchStationsByName', () => {
     expect(result[0].stationId).toBe(1);
     expect(bffFetch).not.toHaveBeenCalled();
     expect(stationApiFetch.mock.calls[0][0]).toBe('https://stationapi/');
+    expect(stationApiFetch.mock.calls[0][1].method).toBe('POST');
   });
 
   it('失敗時に 1 回だけ再試行する', async () => {
