@@ -35,8 +35,9 @@
     ]
   },
 
-  // エージェントの駅検索（stationsByName）は同一アカウントの sapi-bff を Service Binding で呼ぶ
-  "services": [{ "binding": "SAPI_BFF", "service": "sapi-bff-stg" }],
+  // エージェントの駅検索（stationsByName）は同一アカウントの stationapi を Service Binding で呼ぶ。
+  // staging は BFF 廃止に伴い stationapi-stg へ移行済み（本番は sapi-bff のまま）
+  "services": [{ "binding": "STATION_API", "service": "stationapi-stg" }],
 
   "vars": {
     "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",

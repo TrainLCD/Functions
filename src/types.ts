@@ -11,7 +11,9 @@ export interface Env {
   TTS_BUCKET: R2Bucket;
   UPLOAD_BUCKET: R2Bucket;
   FEEDBACK_QUEUE: Queue<FeedbackQueueMessage>;
-  /** sapi-bff（BFF ルートワーカー）への Service Binding。エージェントの駅検索に使う */
+  /** stationapi（GraphQL ワーカー）への Service Binding。エージェントの駅検索に使う */
+  STATION_API?: Fetcher;
+  /** sapi-bff（BFF ルートワーカー）への Service Binding。stationapi 未移行の環境用 */
   SAPI_BFF?: Fetcher;
 
   // --- Vars（非機密。wrangler.jsonc の vars） ---
