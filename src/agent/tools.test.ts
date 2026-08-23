@@ -143,6 +143,31 @@ describe('searchStationsByName', () => {
     expect(init.method).toBe('POST');
   });
 
+  it('STATION_API があれば STATION_API_GRAPHQL_URL より優先する', async () => {
+    const bindingFetch = jest
+      .fn()
+      .mockResolvedValue(gqlResponse([gqlStation(1)]));
+    // 分岐順が入れ替わっても実ネットワークへ出ないようにしておく
+    const globalFetch = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(gqlResponse([gqlStation(99)]));
+    try {
+      const result = await searchStationsByName(
+        {
+          STATION_API: { fetch: bindingFetch },
+          STATION_API_GRAPHQL_URL: 'https://gql.example/graphql',
+        } as unknown as Env,
+        '鎌倉',
+        undefined
+      );
+      expect(result[0].stationId).toBe(1);
+      expect(bindingFetch.mock.calls[0][0]).toBe('https://stationapi/');
+      expect(globalFetch).not.toHaveBeenCalled();
+    } finally {
+      globalFetch.mockRestore();
+    }
+  });
+
   it('失敗時に 1 回だけ再試行する', async () => {
     const fetchMock = jest
       .fn()
