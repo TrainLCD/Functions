@@ -13,8 +13,6 @@ export interface Env {
   FEEDBACK_QUEUE: Queue<FeedbackQueueMessage>;
   /** stationapi（GraphQL ワーカー）への Service Binding。エージェントの駅検索に使う */
   STATION_API?: Fetcher;
-  /** sapi-bff（BFF ルートワーカー）への Service Binding。stationapi 未移行の環境用 */
-  SAPI_BFF?: Fetcher;
 
   // --- Vars（非機密。wrangler.jsonc の vars） ---
   GOOGLE_PLAY_PACKAGE_NAME: string;
@@ -44,8 +42,8 @@ export interface Env {
   GOOGLE_VERTEX_PROJECT?: string;
   /** Vertex AI のロケーション（既定 "global"。例: asia-northeast1） */
   GOOGLE_VERTEX_LOCATION?: string;
-  /** Service Binding 不使用時の sapi-bff GraphQL エンドポイント */
-  SAPI_BFF_GRAPHQL_URL?: string;
+  /** Service Binding 不使用時の stationapi GraphQL エンドポイント */
+  STATION_API_GRAPHQL_URL?: string;
   /** "true" で LangSmith トレーシングを有効化（dev 環境のみ設定すること） */
   LANGSMITH_TRACING?: string;
 

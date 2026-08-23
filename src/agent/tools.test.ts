@@ -115,7 +115,7 @@ describe('buildStationNameVariants', () => {
 
 describe('searchStationsByName', () => {
   const makeEnv = (fetchImpl: jest.Mock): Env =>
-    ({ SAPI_BFF: { fetch: fetchImpl } }) as unknown as Env;
+    ({ STATION_API: { fetch: fetchImpl } }) as unknown as Env;
 
   const queriedNames = (fetchMock: jest.Mock): string[] =>
     fetchMock.mock.calls.map(
@@ -138,22 +138,9 @@ describe('searchStationsByName', () => {
       limit: 10,
       fromStationGroupId: 1130205,
     });
-  });
-
-  it('STATION_API があれば優先し、サブドメイン直下へ POST する', async () => {
-    const stationApiFetch = jest
-      .fn()
-      .mockResolvedValue(gqlResponse([gqlStation(1)]));
-    const bffFetch = jest.fn();
-    const env = {
-      STATION_API: { fetch: stationApiFetch },
-      SAPI_BFF: { fetch: bffFetch },
-    } as unknown as Env;
-    const result = await searchStationsByName(env, '鎌倉', undefined);
-    expect(result[0].stationId).toBe(1);
-    expect(bffFetch).not.toHaveBeenCalled();
-    expect(stationApiFetch.mock.calls[0][0]).toBe('https://stationapi/');
-    expect(stationApiFetch.mock.calls[0][1].method).toBe('POST');
+    // stationapi は GraphQL をサブドメイン直下（POST /）でのみ受ける
+    expect(fetchMock.mock.calls[0][0]).toBe('https://stationapi/');
+    expect(init.method).toBe('POST');
   });
 
   it('失敗時に 1 回だけ再試行する', async () => {
@@ -197,7 +184,7 @@ describe('searchStationsByName', () => {
   it('バインディングも URL も無ければエラー', async () => {
     await expect(
       searchStationsByName({} as unknown as Env, '海', undefined)
-    ).rejects.toThrow('SAPI_BFF');
+    ).rejects.toThrow('STATION_API');
   });
 
   it('0 件なら表記ゆれ候補で引き直す（分かち書きローマ字の救済）', async () => {
@@ -276,7 +263,7 @@ describe('searchStationsByName', () => {
 
 describe('fetchStationByGroupId', () => {
   const makeEnv = (fetchImpl: jest.Mock): Env =>
-    ({ SAPI_BFF: { fetch: fetchImpl } }) as unknown as Env;
+    ({ STATION_API: { fetch: fetchImpl } }) as unknown as Env;
 
   const groupResponse = (stations: unknown[]) =>
     new Response(JSON.stringify({ data: { stationGroupStations: stations } }), {
