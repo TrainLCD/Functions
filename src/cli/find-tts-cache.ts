@@ -1,5 +1,5 @@
 /**
- * KV(TTS_KV) の voice:* メタを SSML 本文で検索し、必要なら KV ドキュメントと
+ * KV(TTS_KV) の voice:* メタを読み上げ本文で検索し、必要なら KV ドキュメントと
  * R2 上の音声ファイルを削除する。旧 Firestore+GCS 版の Cloudflare 移植。
  *
  * KV の一覧・値取得・削除、R2 の削除、バケット名解決はすべて wrangler
@@ -7,7 +7,7 @@
  * ネームスペース ID、R2 認証情報を環境変数で渡す必要はない（要 `wrangler login`）。
  *
  * 例:
- *   npm run find-tts-cache -- "東京" --field ssmlJa
+ *   npm run find-tts-cache -- "東京" --field textJa
  *   npm run find-tts-cache -- "東京" --delete
  *   npm run find-tts-cache -- "東京" --env production --delete
  */
@@ -26,7 +26,7 @@ const R2_BINDING = 'TTS_BUCKET';
 
 interface CliArgs {
   searchTerm: string;
-  field?: 'ssmlJa' | 'ssmlEn';
+  field?: 'textJa' | 'textEn';
   exact: boolean;
   delete: boolean;
   env?: string;
@@ -34,12 +34,12 @@ interface CliArgs {
 
 function printUsage(): void {
   console.error(
-    'Usage: npm run find-tts-cache -- <search-term> [--field ssmlJa|ssmlEn] [--exact] [--delete] [--env <name>]'
+    'Usage: npm run find-tts-cache -- <search-term> [--field textJa|textEn] [--exact] [--delete] [--env <name>]'
   );
   console.error('');
   console.error('Options:');
   console.error(
-    '  --field <ssmlJa|ssmlEn>  検索対象フィールド（省略時は両方）'
+    '  --field <textJa|textEn>  検索対象フィールド（省略時は両方）'
   );
   console.error('  --exact                  部分一致ではなく完全一致で検索');
   console.error('  --delete                 KV ドキュメントと R2 音声を削除');
@@ -57,7 +57,7 @@ function parseArgs(argv: string[]): CliArgs | null {
   if (args.length === 0) return null;
 
   let searchTerm = '';
-  let field: 'ssmlJa' | 'ssmlEn' | undefined;
+  let field: 'textJa' | 'textEn' | undefined;
   let exact = false;
   let deleteMode = false;
   let env: string | undefined;
@@ -66,8 +66,8 @@ function parseArgs(argv: string[]): CliArgs | null {
     switch (args[i]) {
       case '--field': {
         const value = args[++i];
-        if (value !== 'ssmlJa' && value !== 'ssmlEn') {
-          console.error('Error: --field は "ssmlJa" か "ssmlEn" を指定');
+        if (value !== 'textJa' && value !== 'textEn') {
+          console.error('Error: --field は "textJa" か "textEn" を指定');
           process.exit(1);
         }
         field = value;
@@ -141,9 +141,14 @@ async function main(): Promise<void> {
     if (typeof rec.id !== 'string' || rec.id.length === 0) {
       continue;
     }
+    // ssmlJa/ssmlEn は Azure 時代のレコード。旧エントリも掃除できるよう併せて見る
     const hit = field
-      ? matchValue(rec[field])
-      : matchValue(rec.ssmlJa) || matchValue(rec.ssmlEn);
+      ? matchValue(rec[field]) ||
+        matchValue(field === 'textJa' ? rec.ssmlJa : rec.ssmlEn)
+      : matchValue(rec.textJa) ||
+        matchValue(rec.textEn) ||
+        matchValue(rec.ssmlJa) ||
+        matchValue(rec.ssmlEn);
     if (hit) matches.push(rec);
   }
 
@@ -155,8 +160,9 @@ async function main(): Promise<void> {
   console.log(`${matches.length}件のドキュメントが見つかりました:\n`);
   for (const rec of matches) {
     console.log(`ID:         ${rec.id}`);
-    console.log(`SSML (JA):  ${rec.ssmlJa ?? ''}`);
-    console.log(`SSML (EN):  ${rec.ssmlEn ?? ''}`);
+    console.log(`Text (JA):  ${rec.textJa ?? rec.ssmlJa ?? ''}`);
+    console.log(`Text (EN):  ${rec.textEn ?? rec.ssmlEn ?? ''}`);
+    console.log(`Model:      ${rec.model ?? ''}`);
     console.log(`Path (JA):  ${rec.pathJa ?? ''}`);
     console.log(`Path (EN):  ${rec.pathEn ?? ''}`);
     console.log(`Voice (JA): ${rec.voiceJa ?? ''}`);

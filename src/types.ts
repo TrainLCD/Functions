@@ -11,13 +11,16 @@ export interface Env {
   TTS_BUCKET: R2Bucket;
   UPLOAD_BUCKET: R2Bucket;
   FEEDBACK_QUEUE: Queue<FeedbackQueueMessage>;
-  /** sapi-bff（BFF ルートワーカー）への Service Binding。エージェントの駅検索に使う */
-  SAPI_BFF?: Fetcher;
+  /** stationapi（GraphQL ワーカー）への Service Binding。エージェントの駅検索に使う */
+  STATION_API?: Fetcher;
 
   // --- Vars（非機密。wrangler.jsonc の vars） ---
   GOOGLE_PLAY_PACKAGE_NAME: string;
-  AZURE_SPEECH_REGION: string;
   AI_TRIAGE_MODEL: string;
+  /**
+   * Google Cloud TTS のボイス名（例: ja-JP-Standard-B）。ロケールを含むため
+   * 日英で別々に指定する。Standard / Wavenet / Neural2 のみ受け付ける
+   */
   TTS_JA_VOICE_NAME: string;
   TTS_EN_VOICE_NAME: string;
   SESSION_TOKEN_TTL_SECONDS: string;
@@ -25,7 +28,7 @@ export interface Env {
   FEW_SHOT_KV_KEY: string;
   FEW_SHOT_LIMIT: string;
   FEW_SHOT_PER_EX_MAX: string;
-  /** 対話本体モデル（"anthropic:<model>" | "openai:<model>"） */
+  /** 対話本体モデル（"anthropic:<model>" | "openai:<model>" | "google:<model>"） */
   AGENT_MODEL: string;
   /** トピックゲート用の Workers AI モデル */
   AGENT_GATE_MODEL: string;
@@ -35,14 +38,17 @@ export interface Env {
   AGENT_DAILY_TURN_LIMIT: string;
   /** Cloudflare AI Gateway のベース URL（空なら各社 API 直行） */
   AI_GATEWAY_BASE_URL?: string;
-  /** Service Binding 不使用時の sapi-bff GraphQL エンドポイント */
-  SAPI_BFF_GRAPHQL_URL?: string;
+  /** Vertex AI のプロジェクト ID（未設定なら GOOGLE_VERTEX_SA_KEY の project_id） */
+  GOOGLE_VERTEX_PROJECT?: string;
+  /** Vertex AI のロケーション（既定 "global"。例: asia-northeast1） */
+  GOOGLE_VERTEX_LOCATION?: string;
+  /** Service Binding 不使用時の stationapi GraphQL エンドポイント */
+  STATION_API_GRAPHQL_URL?: string;
   /** "true" で LangSmith トレーシングを有効化（dev 環境のみ設定すること） */
   LANGSMITH_TRACING?: string;
 
   // --- Secrets（wrangler secret put で投入） ---
   SESSION_JWT_SECRET: string;
-  AZURE_SPEECH_KEY: string;
   /** Android Publisher 用 Google サービスアカウント鍵 JSON 文字列 */
   GOOGLE_PLAY_SA_KEY: string;
   /** App Store Connect API 鍵 JSON 文字列 ({keyId, issuerId, privateKey}) */
@@ -55,14 +61,24 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   /** 対話本体（GPT）の API キー。AGENT_MODEL が openai: のとき必須 */
   OPENAI_API_KEY?: string;
+  /**
+   * 対話本体（Gemini / Vertex AI）用の Google サービスアカウント鍵 JSON 文字列。
+   * AGENT_MODEL が google: のとき必須（Vertex AI は API キーではなくサービス
+   * アカウント認証のため。ロールは Vertex AI User 相当）
+   */
+  GOOGLE_VERTEX_SA_KEY?: string;
+  /** Cloud TTS（/tts）用の Google サービスアカウント鍵 JSON 文字列 */
+  GOOGLE_TTS_SA_KEY?: string;
   /** LangSmith の API キー（dev 環境のトレーシング用・任意） */
   LANGSMITH_API_KEY?: string;
 
-  // --- Azure TTS チューニング（任意。未設定なら高音質既定のみ適用） ---
-  AZURE_TTS_OUTPUT_FORMAT?: string;
-  AZURE_TTS_STYLE?: string;
-  AZURE_TTS_STYLE_DEGREE?: string;
-  AZURE_TTS_PITCH?: string;
+  // --- TTS チューニング（任意。未設定なら mp3・等速・標準の高さ） ---
+  /** Cloud TTS の audioEncoding に対応する形式（mp3 / wav / opus） */
+  TTS_RESPONSE_FORMAT?: string;
+  /** 読み上げ速度（speakingRate。0.25〜4.0） */
+  TTS_SPEED?: string;
+  /** 声の高さ（pitch。-20.0〜20.0 セミトーン） */
+  TTS_PITCH?: string;
 
   // --- 任意のデバッグ変数（未設定可） ---
   REVIEWS_DEBUG?: string;
@@ -71,17 +87,21 @@ export interface Env {
   APPSTORE_APP_ID?: string;
 }
 
-/** TTS キャッシュ書き込みのペイロード（R2+KV へ直接保存。キューは介さない） */
+/**
+ * TTS キャッシュ書き込みのペイロード（R2+KV へ直接保存。キューは介さない）。
+ * 片方の言語だけ合成することがあるため、言語ごとのフィールドは任意。
+ */
 export interface TtsCachePayload {
   id: string;
-  jaAudioContent: string;
-  enAudioContent: string;
-  jaAudioMimeType: string;
-  enAudioMimeType: string;
-  ssmlJa: string;
-  ssmlEn: string;
-  voiceJa: string;
-  voiceEn: string;
+  model: string;
+  jaAudioContent?: string;
+  enAudioContent?: string;
+  jaAudioMimeType?: string;
+  enAudioMimeType?: string;
+  textJa?: string;
+  textEn?: string;
+  voiceJa?: string;
+  voiceEn?: string;
 }
 
 /** feedback-triage キューのメッセージ */

@@ -2,8 +2,9 @@
 #
 # Worker のシークレットを `wrangler secret bulk` で一括投入する。
 # 値は KEY=VALUE 形式のファイル（既定: functions/.secrets.env, gitignore 済み）から読む。
-# GOOGLE_PLAY_SA_KEY は環境変数 GOOGLE_PLAY_SA_KEY_FILE にサービスアカウント鍵 JSON の
-# パスを渡せば、その中身をそのまま投入する。
+# サービスアカウント鍵（GOOGLE_PLAY_SA_KEY / GOOGLE_VERTEX_SA_KEY /
+# GOOGLE_TTS_SA_KEY）は環境変数
+# <NAME>_FILE に鍵 JSON のパスを渡せば、その中身をそのまま投入する。
 #
 # stdin パイプ（`echo ... | wrangler secret put`）は Windows/Git Bash で値が
 # 届かないことがあるため、Node で一時 JSON を生成して `secret bulk` に渡す方式にしている。
@@ -13,6 +14,8 @@
 #   ./scripts/put-secrets.sh --env production     # production へ
 #   SECRETS_FILE=.secrets.prod.env ./scripts/put-secrets.sh --env production
 #   GOOGLE_PLAY_SA_KEY_FILE=./sa.json ./scripts/put-secrets.sh
+#   GOOGLE_VERTEX_SA_KEY_FILE=./secrets-vertex-sa.json ./scripts/put-secrets.sh
+#   GOOGLE_TTS_SA_KEY_FILE=./secrets-tts-sa.json ./scripts/put-secrets.sh
 #
 set -euo pipefail
 
@@ -47,9 +50,9 @@ TMP_JSON=".secrets.bulk.$$.json"
 cleanup() { rm -f "$TMP_JSON"; }
 trap cleanup EXIT
 
-# .secrets.env + GOOGLE_PLAY_SA_KEY_FILE から bulk 用 JSON を生成（エスケープは Node 任せ）
+# .secrets.env + <NAME>_FILE から bulk 用 JSON を生成（エスケープは Node 任せ）
 if ! node scripts/build-secrets-json.mjs "$SECRETS_FILE" "$TMP_JSON"; then
-  echo "投入対象のシークレットがありません（$SECRETS_FILE / GOOGLE_PLAY_SA_KEY_FILE を確認）" >&2
+  echo "投入対象のシークレットがありません（$SECRETS_FILE / <NAME>_FILE を確認）" >&2
   exit 1
 fi
 

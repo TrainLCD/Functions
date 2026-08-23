@@ -35,25 +35,38 @@
     ]
   },
 
-  // エージェントの駅検索（stationsByName）は同一アカウントの sapi-bff を Service Binding で呼ぶ
-  "services": [{ "binding": "SAPI_BFF", "service": "sapi-bff-stg" }],
+  // エージェントの駅検索（stationsByName）は同一アカウントの stationapi を Service Binding で呼ぶ。
+  // BFF 廃止に伴い staging・本番とも stationapi へ移行済み
+  "services": [{ "binding": "STATION_API", "service": "stationapi-stg" }],
 
   "vars": {
     "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
-    "AZURE_SPEECH_REGION": "southeastasia",
-    "AZURE_TTS_OUTPUT_FORMAT": "audio-48khz-192kbitrate-mono-mp3",
-    // HD（DragonHD）ボイスは <prosody> 非対応のため AZURE_TTS_RATE は設定しない
     "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
-    "TTS_JA_VOICE_NAME": "ja-JP-Nanami:DragonHDLatestNeural",
-    "TTS_EN_VOICE_NAME": "en-US-Jenny:DragonHDOmniLatestNeural",
+    // --- TTS（/tts）---
+    // Google Cloud TTS。ボイス名はロケール込みで、日英それぞれに指定する。
+    // 既定は旧 Google TTS 実装（Firebase Functions 時代）と同じ組み合わせ。
+    // Standard 系は端末内蔵 TTS と同水準の音質で単価も最安。より高品質にするなら
+    // 末尾記号はそのまま Wavenet / Neural2 へ差し替える（例: ja-JP-Wavenet-B）。
+    // 読み方のプロンプト指示は Standard 系に無いため、速さは TTS_SPEED
+    // （speakingRate）、高さは TTS_PITCH で調整する。
+    "TTS_JA_VOICE_NAME": "ja-JP-Standard-B",
+    "TTS_EN_VOICE_NAME": "en-US-Standard-G",
+    // 車内自動放送らしく早口寄りにする（1.0 が等速。旧実装は無指定＝1.0 だった）
+    "TTS_SPEED": "1.15",
     "SESSION_TOKEN_TTL_SECONDS": "3600",
     "UPLOAD_PUBLIC_BASE_URL": "https://uploads-dev.trainlcd.app",
     "FEW_SHOT_KV_KEY": "config:fewshot",
     "FEW_SHOT_LIMIT": "12",
     "FEW_SHOT_PER_EX_MAX": "800",
     // --- AI エージェント（/agent/chat）---
-    // モデルは "anthropic:<model>" | "openai:<model>"。比較検証で差し替える
-    "AGENT_MODEL": "openai:gpt-5.6-luna",
+    // モデルは "anthropic:<model>" | "openai:<model>" | "google:<model>"。比較検証で差し替える
+    // （"google:" は Vertex AI 経由。API キーではなく GOOGLE_VERTEX_SA_KEY が必要）
+    "AGENT_MODEL": "google:gemini-3.7-flash",
+    // Vertex AI 用（AGENT_MODEL が google: のときのみ使う）。
+    // GOOGLE_VERTEX_PROJECT 未設定なら GOOGLE_VERTEX_SA_KEY の project_id を使う。
+    // ロケーションは "global" がモデルの提供範囲が最も広い。特定リージョンに寄せるなら
+    // "asia-northeast1" など（AI Gateway 経由でもどちらも中継される）
+    "GOOGLE_VERTEX_LOCATION": "global",
     "AGENT_GATE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
     "AGENT_FAQ_KV_KEY": "config:agent-faq",
     // config:remote の agent_daily_turn_limit があればそちらが優先（デプロイなしで調整可）
@@ -66,9 +79,10 @@
   },
 
   // secrets（`wrangler secret put <NAME>` で投入。コミットしない）:
-  //   SESSION_JWT_SECRET / AZURE_SPEECH_KEY / GOOGLE_PLAY_SA_KEY / APPSTORE_CONNECT_KEY /
+  //   SESSION_JWT_SECRET / GOOGLE_PLAY_SA_KEY / APPSTORE_CONNECT_KEY /
   //   OCTOKIT_PAT / DISCORD_CS_WEBHOOK_URL / DISCORD_CRASH_WEBHOOK_URL / DISCORD_REVIEW_WEBHOOK_URL /
-  //   ANTHROPIC_API_KEY / OPENAI_API_KEY / LANGSMITH_API_KEY
+  //   ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_VERTEX_SA_KEY / LANGSMITH_API_KEY /
+  //   GOOGLE_TTS_SA_KEY
 
   "env": {
     "production": {
@@ -93,22 +107,23 @@
           { "queue": "feedback-triage", "max_batch_size": 5, "max_retries": 3 }
         ]
       },
-      "services": [{ "binding": "SAPI_BFF", "service": "sapi-bff" }],
+      "services": [{ "binding": "STATION_API", "service": "stationapi" }],
       "vars": {
         "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
-        "AZURE_SPEECH_REGION": "southeastasia",
-        "AZURE_TTS_OUTPUT_FORMAT": "audio-48khz-192kbitrate-mono-mp3",
-        // HD（DragonHD）ボイスは <prosody> 非対応のため AZURE_TTS_RATE は設定しない
         "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
-        "TTS_JA_VOICE_NAME": "ja-JP-Nanami:DragonHDLatestNeural",
-        "TTS_EN_VOICE_NAME": "en-US-Jenny:DragonHDLatestNeural",
+        // --- TTS（/tts）---
+        // Google Cloud TTS。本番は dev より控えめの「やや速め」に合わせる
+        "TTS_JA_VOICE_NAME": "ja-JP-Standard-B",
+        "TTS_EN_VOICE_NAME": "en-US-Standard-G",
+        "TTS_SPEED": "1.1",
         "SESSION_TOKEN_TTL_SECONDS": "3600",
         "UPLOAD_PUBLIC_BASE_URL": "https://uploads.trainlcd.app",
         "FEW_SHOT_KV_KEY": "config:fewshot",
         "FEW_SHOT_LIMIT": "12",
         "FEW_SHOT_PER_EX_MAX": "800",
         // --- AI エージェント（/agent/chat）---
-        "AGENT_MODEL": "openai:gpt-5.6-luna",
+        "AGENT_MODEL": "google:gemini-3.7-flash",
+        "GOOGLE_VERTEX_LOCATION": "global",
         "AGENT_GATE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
         "AGENT_FAQ_KV_KEY": "config:agent-faq",
         // config:remote の agent_daily_turn_limit があればそちらが優先（デプロイなしで調整可）
