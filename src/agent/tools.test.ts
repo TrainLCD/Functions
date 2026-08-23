@@ -115,7 +115,7 @@ describe('buildStationNameVariants', () => {
 
 describe('searchStationsByName', () => {
   const makeEnv = (fetchImpl: jest.Mock): Env =>
-    ({ SAPI_BFF: { fetch: fetchImpl } }) as unknown as Env;
+    ({ STATION_API: { fetch: fetchImpl } }) as unknown as Env;
 
   const queriedNames = (fetchMock: jest.Mock): string[] =>
     fetchMock.mock.calls.map(
@@ -138,22 +138,34 @@ describe('searchStationsByName', () => {
       limit: 10,
       fromStationGroupId: 1130205,
     });
+    // stationapi は GraphQL をサブドメイン直下（POST /）でのみ受ける
+    expect(fetchMock.mock.calls[0][0]).toBe('https://stationapi/');
+    expect(init.method).toBe('POST');
   });
 
-  it('STATION_API があれば優先し、サブドメイン直下へ POST する', async () => {
-    const stationApiFetch = jest
+  it('STATION_API があれば STATION_API_GRAPHQL_URL より優先する', async () => {
+    const bindingFetch = jest
       .fn()
       .mockResolvedValue(gqlResponse([gqlStation(1)]));
-    const bffFetch = jest.fn();
-    const env = {
-      STATION_API: { fetch: stationApiFetch },
-      SAPI_BFF: { fetch: bffFetch },
-    } as unknown as Env;
-    const result = await searchStationsByName(env, '鎌倉', undefined);
-    expect(result[0].stationId).toBe(1);
-    expect(bffFetch).not.toHaveBeenCalled();
-    expect(stationApiFetch.mock.calls[0][0]).toBe('https://stationapi/');
-    expect(stationApiFetch.mock.calls[0][1].method).toBe('POST');
+    // 分岐順が入れ替わっても実ネットワークへ出ないようにしておく
+    const globalFetch = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(gqlResponse([gqlStation(99)]));
+    try {
+      const result = await searchStationsByName(
+        {
+          STATION_API: { fetch: bindingFetch },
+          STATION_API_GRAPHQL_URL: 'https://gql.example/graphql',
+        } as unknown as Env,
+        '鎌倉',
+        undefined
+      );
+      expect(result[0].stationId).toBe(1);
+      expect(bindingFetch.mock.calls[0][0]).toBe('https://stationapi/');
+      expect(globalFetch).not.toHaveBeenCalled();
+    } finally {
+      globalFetch.mockRestore();
+    }
   });
 
   it('失敗時に 1 回だけ再試行する', async () => {
@@ -197,7 +209,7 @@ describe('searchStationsByName', () => {
   it('バインディングも URL も無ければエラー', async () => {
     await expect(
       searchStationsByName({} as unknown as Env, '海', undefined)
-    ).rejects.toThrow('SAPI_BFF');
+    ).rejects.toThrow('STATION_API');
   });
 
   it('0 件なら表記ゆれ候補で引き直す（分かち書きローマ字の救済）', async () => {
@@ -276,7 +288,7 @@ describe('searchStationsByName', () => {
 
 describe('fetchStationByGroupId', () => {
   const makeEnv = (fetchImpl: jest.Mock): Env =>
-    ({ SAPI_BFF: { fetch: fetchImpl } }) as unknown as Env;
+    ({ STATION_API: { fetch: fetchImpl } }) as unknown as Env;
 
   const groupResponse = (stations: unknown[]) =>
     new Response(JSON.stringify({ data: { stationGroupStations: stations } }), {

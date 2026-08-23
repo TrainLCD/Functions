@@ -36,7 +36,7 @@
   },
 
   // エージェントの駅検索（stationsByName）は同一アカウントの stationapi を Service Binding で呼ぶ。
-  // staging は BFF 廃止に伴い stationapi-stg へ移行済み（本番は sapi-bff のまま）
+  // BFF 廃止に伴い staging・本番とも stationapi へ移行済み
   "services": [{ "binding": "STATION_API", "service": "stationapi-stg" }],
 
   "vars": {
@@ -107,7 +107,7 @@
           { "queue": "feedback-triage", "max_batch_size": 5, "max_retries": 3 }
         ]
       },
-      "services": [{ "binding": "SAPI_BFF", "service": "sapi-bff" }],
+      "services": [{ "binding": "STATION_API", "service": "stationapi" }],
       "vars": {
         "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
         "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",

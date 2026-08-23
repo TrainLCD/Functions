@@ -1,7 +1,7 @@
 /**
  * 駅検索ツール — stationapi の GraphQL stationsByName で
- * 駅名の実在確認を行う。Service Binding（STATION_API、未移行の環境は SAPI_BFF）を
- * 優先し、未設定なら SAPI_BFF_GRAPHQL_URL への fetch にフォールバックする。
+ * 駅名の実在確認を行う。Service Binding（STATION_API）を優先し、
+ * 未設定なら STATION_API_GRAPHQL_URL への fetch にフォールバックする。
  * 検索結果は verified マップへ蓄積し、最終応答のサーバ側検証
  * （validate.ts の sanitizeSuggestions）の突合元になる。
  */
@@ -107,16 +107,10 @@ const postGraphQL = async (
     // stationapi は GraphQL をサブドメイン直下（POST /）で受ける
     return env.STATION_API.fetch('https://stationapi/', init);
   }
-  if (env.SAPI_BFF) {
-    // Service Binding はホスト名を解決しないため URL はダミーでよい
-    return env.SAPI_BFF.fetch('https://sapi-bff/graphql', init);
+  if (env.STATION_API_GRAPHQL_URL) {
+    return fetch(env.STATION_API_GRAPHQL_URL, init);
   }
-  if (env.SAPI_BFF_GRAPHQL_URL) {
-    return fetch(env.SAPI_BFF_GRAPHQL_URL, init);
-  }
-  throw new Error(
-    'STATION_API / SAPI_BFF binding or SAPI_BFF_GRAPHQL_URL is required'
-  );
+  throw new Error('STATION_API binding or STATION_API_GRAPHQL_URL is required');
 };
 
 const queryStationsOnce = async (
