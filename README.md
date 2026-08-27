@@ -206,6 +206,12 @@ The `output` of each example must include `component` / `componentConfidence`
 as well; the model imitates the examples, so examples without those fields make
 it omit them and public repo routing never fires.
 
+Optional per-example fields: `weight` (a value above 1 makes the example more
+likely to survive sampling) and `disabled: true` (skips the line). Only
+`FEW_SHOT_LIMIT` examples are sampled per request, so a component or category
+with a single example — `praise`, `functions`, `website` — must carry a
+`weight`, otherwise it drops out of the prompt and the model never produces it.
+
 Upload (the file is stored verbatim as a single KV value):
 
 ```bash

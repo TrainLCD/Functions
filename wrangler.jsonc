@@ -59,7 +59,7 @@
     "SESSION_TOKEN_TTL_SECONDS": "3600",
     "UPLOAD_PUBLIC_BASE_URL": "https://uploads-dev.trainlcd.app",
     "FEW_SHOT_KV_KEY": "config:fewshot",
-    "FEW_SHOT_LIMIT": "12",
+    "FEW_SHOT_LIMIT": "16",
     "FEW_SHOT_PER_EX_MAX": "800",
     // --- AI エージェント（/agent/chat）---
     // モデルは "anthropic:<model>" | "openai:<model>" | "google:<model>"。比較検証で差し替える
@@ -123,7 +123,7 @@
         "SESSION_TOKEN_TTL_SECONDS": "3600",
         "UPLOAD_PUBLIC_BASE_URL": "https://uploads.trainlcd.app",
         "FEW_SHOT_KV_KEY": "config:fewshot",
-        "FEW_SHOT_LIMIT": "12",
+        "FEW_SHOT_LIMIT": "16",
         "FEW_SHOT_PER_EX_MAX": "800",
         // --- AI エージェント（/agent/chat）---
         "AGENT_MODEL": "google:gemini-3.7-flash",
