@@ -48,11 +48,13 @@
     // Standard 系は端末内蔵 TTS と同水準の音質で単価も最安。より高品質にするなら
     // 末尾記号はそのまま Wavenet / Neural2 へ差し替える（例: ja-JP-Wavenet-B）。
     // 読み方のプロンプト指示は Standard 系に無いため、速さは TTS_SPEED
-    // （speakingRate）、高さは TTS_PITCH で調整する。
+    // （speakingRate）、高さは TTS_PITCH で調整する。TTS_SPEED はアプリが速度を
+    // 送ってこなかったときの既定値で、送ってきた場合はそちら（プリセット3値のみ）が優先。
     "TTS_JA_VOICE_NAME": "ja-JP-Standard-B",
     "TTS_EN_VOICE_NAME": "en-US-Standard-G",
-    // 車内自動放送らしく早口寄りにする（1.0 が等速。旧実装は無指定＝1.0 だった）
-    "TTS_SPEED": "1.15",
+    // アプリのアナウンス速度設定（既定「普通」）と同じ等速。速度を送ってこない
+    // 旧バージョンのアプリも、設定の既定値と同じ速さで聞こえるようにしている
+    "TTS_SPEED": "1.0",
     "SESSION_TOKEN_TTL_SECONDS": "3600",
     "UPLOAD_PUBLIC_BASE_URL": "https://uploads-dev.trainlcd.app",
     "FEW_SHOT_KV_KEY": "config:fewshot",
@@ -112,10 +114,11 @@
         "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
         "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
         // --- TTS（/tts）---
-        // Google Cloud TTS。本番は dev より控えめの「やや速め」に合わせる
+        // Google Cloud TTS。速度はアプリのアナウンス速度設定（既定「普通」）に
+        // 合わせた等速。dev と本番で差を付けると開発時の体感が本番と食い違う
         "TTS_JA_VOICE_NAME": "ja-JP-Standard-B",
         "TTS_EN_VOICE_NAME": "en-US-Standard-G",
-        "TTS_SPEED": "1.1",
+        "TTS_SPEED": "1.0",
         "SESSION_TOKEN_TTL_SECONDS": "3600",
         "UPLOAD_PUBLIC_BASE_URL": "https://uploads.trainlcd.app",
         "FEW_SHOT_KV_KEY": "config:fewshot",
