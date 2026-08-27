@@ -273,19 +273,22 @@ export function coerceReport(raw: unknown, titleMax = 72): AIReport {
   for (const [k, v] of entries) map.set(norm(k), v);
 
   const getStr = (k: string, d = '') => String(map.get(k) ?? d).trim();
-  const getNum = (k: string, d = 0.5) => {
-    const n = Number(map.get(k));
-    return Number.isFinite(n) ? n : d;
-  };
   /**
-   * 0..1 の信頼度を読む。範囲外（"90" のようにパーセントで返すなど）は
+   * 0..1 の信頼度を読む。数値（または数値だけの文字列）以外と範囲外は、
    * スキーマに従っていない応答なので値を信用せず既定値に倒す。
+   * Number() 任せにすると true や [1] が 1 に化けてしまうため型で絞る。
    * 特に componentConfidence は公開リポジトリへの起票判定に使うため、
    * 壊れた値をそのまま通すと内容を公開すべきでないものが流出しうる。
    */
   const getRatio = (k: string, d: number) => {
-    const n = getNum(k, d);
-    return n >= 0 && n <= 1 ? n : d;
+    const raw = map.get(k);
+    const n =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && raw.trim() !== ''
+          ? Number(raw)
+          : Number.NaN;
+    return Number.isFinite(n) && n >= 0 && n <= 1 ? n : d;
   };
   const getBool = (...keys: string[]) =>
     keys.some((k) => {

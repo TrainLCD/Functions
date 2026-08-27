@@ -270,6 +270,8 @@ describe('coerceReport（原因コンポーネント）', () => {
     for (const bad of [90, 1.2, -0.5]) {
       const r = coerceReport({
         component: 'station_api',
+        // category を省くと question 扱いになり、信頼度に到達する前に弾かれてしまう
+        category: 'bug',
         componentConfidence: bad,
         confidence: bad,
       });
@@ -282,6 +284,35 @@ describe('coerceReport（原因コンポーネント）', () => {
         })
       ).toBeNull();
     }
+  });
+
+  it('数値でない信頼度は既定値に倒す（Number() の型強制を通さない）', () => {
+    // Number(true) === 1、Number([1]) === 1 なので、型で絞らないと閾値を通過する
+    for (const bad of [true, [1], null, '', ' ', {}]) {
+      const r = coerceReport({
+        component: 'station_api',
+        category: 'bug',
+        componentConfidence: bad,
+        confidence: bad,
+      });
+      expect(r.componentConfidence).toBe(0);
+      expect(r.confidence).toBe(0.5);
+      expect(
+        resolvePublicIssueRepo(r, {
+          reportType: 'feedback',
+          triageFailed: false,
+        })
+      ).toBeNull();
+    }
+  });
+
+  it('数値だけの文字列は受け付ける', () => {
+    const r = coerceReport({
+      component: 'station_api',
+      category: 'bug',
+      componentConfidence: '0.9',
+    });
+    expect(r.componentConfidence).toBe(0.9);
   });
 
   it('境界値の 0 と 1 は受け付ける', () => {
