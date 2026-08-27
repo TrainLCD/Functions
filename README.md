@@ -292,16 +292,35 @@ this queue existed. Check and extend it if an incident may outlast it:
 # 14 days is the maximum. Run this for the dev DLQ too — retention is per queue,
 # and feedback-triage-dev-dlq does not inherit anything from the prod one.
 for q in feedback-triage-dlq feedback-triage-dev-dlq; do
-  wrangler queues info "$q"
   wrangler queues update "$q" --message-retention-period-secs 1209600
 done
 ```
+
+`wrangler queues info` does not print the retention period (as of wrangler 4.103),
+so there is no CLI read-back for it — set it explicitly, or check the dashboard.
 
 To recover, fix the root cause first, then replay by temporarily attaching a
 consumer to the DLQ. Give that consumer its own dead letter queue — a replay
 consumer runs the same handler, so anything still failing would hit `max_retries`
 and be deleted outright, which is the exact loss this section exists to prevent.
-Detach the temporary consumer once the backlog is drained.
+
+```bash
+# production. For dev: DLQ=feedback-triage-dev-dlq, SCRIPT=trainlcd-worker-dev
+DLQ=feedback-triage-dlq
+SCRIPT=trainlcd-worker
+
+wrangler queues info "$DLQ"                 # backlog size, current consumers
+wrangler queues create "$DLQ-quarantine"    # catches whatever still fails on replay
+wrangler queues consumer add "$DLQ" "$SCRIPT" --dead-letter-queue "$DLQ-quarantine"
+
+# ...wait for the backlog to drain, then detach:
+wrangler queues consumer remove "$DLQ" "$SCRIPT"
+```
+
+The replay consumer is deliberately not declared in `wrangler.jsonc` — it exists
+only for the duration of an incident, so nothing will remove it for you. Leaving
+it attached means every later failure gets reprocessed by it instead of landing
+in the DLQ where you can see it.
 
 Note that DLQ messages carry the full feedback payload, so the DLQ is subject to
 the same handling rules as the private `TrainLCD/Issues` repo.
