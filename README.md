@@ -20,7 +20,7 @@ single Worker.
 - **Cloudflare Workers** — `fetch` / `queue` / `scheduled` handlers
 - **Workers KV** — TTS cache metadata, config, and review read-state
 - **R2** — audio binaries and feedback images
-- **Cloudflare Queues** — `feedback-triage`
+- **Cloudflare Queues** — `feedback-triage` (+ `feedback-triage-dlq` as its dead letter queue)
 - **Workers AI** — feedback triage
 - **Google Cloud Text-to-Speech** — TTS synthesis (`Standard` voices, service-account auth)
 - **OpenAI** — the conversational agent
@@ -57,6 +57,7 @@ wrangler r2 bucket create trainlcd-tts-dev
 wrangler r2 bucket create trainlcd-uploads-dev
 # Queues
 wrangler queues create feedback-triage-dev
+wrangler queues create feedback-triage-dev-dlq   # dead letter queue (no consumer)
 ```
 
 ### Setting secrets
@@ -263,6 +264,23 @@ Measured with the real prompt + few-shot (2026-08): `@cf/google/gemma-4-26b-a4b-
 completes in 5–17 s at 26–62 neurons per feedback, versus ~1 s and ~4.7 neurons
 for the old 8B model. Queue consumers use `max_batch_size: 5`, so a batch stays
 well inside the invocation limit.
+
+### Dead letter queue
+
+`processFeedbackMessage()` rethrows on failure so the consumer can `retry()`,
+but retrying does not help when the cause is permanent — an expired
+`OCTOKIT_PAT`, a revoked repo grant, a renamed repo. Without a dead letter
+queue the message is simply dropped once `max_retries: 3` is exhausted, and the
+feedback is lost for good.
+
+The consumers therefore declare `dead_letter_queue` (`feedback-triage-dlq`, and
+`feedback-triage-dev-dlq` for dev). The DLQ intentionally has **no consumer** —
+running the same handler against it would fail for the same reason. Inspect the
+backlog with `wrangler queues info feedback-triage-dlq`, fix the root cause,
+then replay by temporarily pointing a consumer at the DLQ.
+
+Note that DLQ messages carry the full feedback payload, so the DLQ is subject to
+the same handling rules as the private `TrainLCD/Issues` repo.
 
 ## Public repo routing
 
