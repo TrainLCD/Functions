@@ -289,8 +289,12 @@ deadline: once it passes the feedback is gone just as surely as it was before
 this queue existed. Check and extend it if an incident may outlast it:
 
 ```bash
-wrangler queues info feedback-triage-dlq
-wrangler queues update feedback-triage-dlq --message-retention-period-secs 1209600  # 14 days, the maximum
+# 14 days is the maximum. Run this for the dev DLQ too — retention is per queue,
+# and feedback-triage-dev-dlq does not inherit anything from the prod one.
+for q in feedback-triage-dlq feedback-triage-dev-dlq; do
+  wrangler queues info "$q"
+  wrangler queues update "$q" --message-retention-period-secs 1209600
+done
 ```
 
 To recover, fix the root cause first, then replay by temporarily attaching a
