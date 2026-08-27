@@ -277,6 +277,16 @@ export function coerceReport(raw: unknown, titleMax = 72): AIReport {
     const n = Number(map.get(k));
     return Number.isFinite(n) ? n : d;
   };
+  /**
+   * 0..1 の信頼度を読む。範囲外（"90" のようにパーセントで返すなど）は
+   * スキーマに従っていない応答なので値を信用せず既定値に倒す。
+   * 特に componentConfidence は公開リポジトリへの起票判定に使うため、
+   * 壊れた値をそのまま通すと内容を公開すべきでないものが流出しうる。
+   */
+  const getRatio = (k: string, d: number) => {
+    const n = getNum(k, d);
+    return n >= 0 && n <= 1 ? n : d;
+  };
   const getBool = (...keys: string[]) =>
     keys.some((k) => {
       const v = map.get(k);
@@ -290,7 +300,7 @@ export function coerceReport(raw: unknown, titleMax = 72): AIReport {
   const labels: string[] = Array.isArray(rawLabels)
     ? rawLabels.filter((l): l is string => typeof l === 'string')
     : [];
-  const confidence = getNum('confidence', 0.5);
+  const confidence = getRatio('confidence', 0.5);
   const reason = getStr('reason');
   const categoryKey = getStr('category')
     .toLowerCase()
@@ -306,7 +316,9 @@ export function coerceReport(raw: unknown, titleMax = 72): AIReport {
   const component: AIComponent | null =
     COMPONENT_SYNONYMS[componentKey] ?? null;
   // 原因が特定できていないのに信頼度だけ高い、という応答を弾くため component とセットで扱う
-  const componentConfidence = component ? getNum('componentconfidence', 0) : 0;
+  const componentConfidence = component
+    ? getRatio('componentconfidence', 0)
+    : 0;
 
   if (!title) title = MISSING_TITLE;
   if (title.length > titleMax) title = `${title.slice(0, titleMax - 1)}…`;
@@ -526,8 +538,8 @@ const TRIAGE_JSON_SCHEMA = {
       type: 'string',
       enum: ['mobile_app', 'station_api', 'functions', 'website', 'unknown'],
     },
-    componentConfidence: { type: 'number' },
-    confidence: { type: 'number' },
+    componentConfidence: { type: 'number', minimum: 0, maximum: 1 },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
     reason: { type: 'string' },
   },
   // category / triageLevel を optional にしていたため、モデルが省略した非スパムの

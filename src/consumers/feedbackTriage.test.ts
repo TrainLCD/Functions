@@ -263,6 +263,37 @@ describe('coerceReport（原因コンポーネント）', () => {
     const r = coerceReport({ component: 'functions' });
     expect(r.componentConfidence).toBe(0);
   });
+
+  it('0..1 の範囲外の信頼度は信用せず既定値に倒す', () => {
+    // パーセント表記（90）や負値は、そのまま通すと閾値判定をすり抜けて
+    // 公開リポジトリへ起票されてしまう
+    for (const bad of [90, 1.2, -0.5]) {
+      const r = coerceReport({
+        component: 'station_api',
+        componentConfidence: bad,
+        confidence: bad,
+      });
+      expect(r.componentConfidence).toBe(0);
+      expect(r.confidence).toBe(0.5);
+      expect(
+        resolvePublicIssueRepo(r, {
+          reportType: 'feedback',
+          triageFailed: false,
+        })
+      ).toBeNull();
+    }
+  });
+
+  it('境界値の 0 と 1 は受け付ける', () => {
+    expect(
+      coerceReport({ component: 'website', componentConfidence: 1 })
+        .componentConfidence
+    ).toBe(1);
+    expect(
+      coerceReport({ component: 'website', componentConfidence: 0 })
+        .componentConfidence
+    ).toBe(0);
+  });
 });
 
 const baseReport = (overrides: Partial<AIReport> = {}): AIReport => ({
