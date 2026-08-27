@@ -20,7 +20,7 @@ single Worker.
 - **Cloudflare Workers** — `fetch` / `queue` / `scheduled` handlers
 - **Workers KV** — TTS cache metadata, config, and review read-state
 - **R2** — audio binaries and feedback images
-- **Cloudflare Queues** — `feedback-triage`
+- **Cloudflare Queues** — `feedback-triage` (+ `feedback-triage-dlq` as its dead letter queue)
 - **Workers AI** — feedback triage
 - **Google Cloud Text-to-Speech** — TTS synthesis (`Standard` voices, service-account auth)
 - **OpenAI** — the conversational agent
@@ -57,7 +57,13 @@ wrangler r2 bucket create trainlcd-tts-dev
 wrangler r2 bucket create trainlcd-uploads-dev
 # Queues
 wrangler queues create feedback-triage-dev
+wrangler queues create feedback-triage-dev-dlq   # dead letter queue (no consumer)
 ```
+
+The names above are the dev ones. Production uses the same set without the
+`-dev` suffix (`trainlcd-tts`, `trainlcd-uploads`, `feedback-triage`,
+`feedback-triage-dlq`); create those too if you are setting up prod from
+scratch. Both environments' resources already exist on the TrainLCD account.
 
 ### Setting secrets
 
@@ -263,6 +269,77 @@ Measured with the real prompt + few-shot (2026-08): `@cf/google/gemma-4-26b-a4b-
 completes in 5–17 s at 26–62 neurons per feedback, versus ~1 s and ~4.7 neurons
 for the old 8B model. Queue consumers use `max_batch_size: 5`, so a batch stays
 well inside the invocation limit.
+
+### Dead letter queue
+
+`processFeedbackMessage()` rethrows on failure so the consumer can `retry()`,
+but retrying does not help when the cause is permanent — a credential that no
+longer grants access, a repo that was renamed. Without a dead letter queue the
+message is simply dropped once `max_retries: 3` is exhausted, and the feedback
+is lost for good.
+
+The consumers therefore declare `dead_letter_queue` (`feedback-triage-dlq`, and
+`feedback-triage-dev-dlq` for dev). The DLQ intentionally has **no consumer** —
+running the same handler against it would fail for the same reason.
+
+**A DLQ is not archival storage.** Messages sitting in it expire on the queue's
+retention period, which both DLQs inherit from the account default (4 days on a
+paid plan, and not extendable beyond 24 h on the free plan). That is the replay
+deadline: once it passes the feedback is gone just as surely as it was before
+this queue existed. Check and extend it if an incident may outlast it:
+
+```bash
+# 1209600 = 14 days, the paid-plan maximum. The free tier is capped at 86400
+# (24 h) and rejects anything above it, so use that value instead on free.
+# Run this for the dev DLQ too — retention is per queue, and
+# feedback-triage-dev-dlq inherits nothing from the prod one.
+RETENTION=1209600
+for q in feedback-triage-dlq feedback-triage-dev-dlq; do
+  wrangler queues update "$q" --message-retention-period-secs "$RETENTION"
+done
+```
+
+`wrangler queues info` does not print the retention period (as of wrangler 4.103),
+so there is no CLI read-back for it — set it explicitly, or check the dashboard.
+
+To recover, fix the root cause first, then replay by temporarily attaching a
+consumer to the DLQ. Give that consumer its own dead letter queue — a replay
+consumer runs the same handler, so anything still failing would hit `max_retries`
+and be deleted outright, which is the exact loss this section exists to prevent.
+
+```bash
+# production. For dev: DLQ=feedback-triage-dev-dlq, SCRIPT=trainlcd-worker-dev
+DLQ=feedback-triage-dlq
+SCRIPT=trainlcd-worker
+RETENTION=1209600   # 86400 on the free tier, as above
+
+wrangler queues info "$DLQ"    # backlog size, current consumers
+
+# Catches whatever still fails on replay. Give it the same retention as the DLQ,
+# otherwise it silently falls back to the account default.
+wrangler queues create "$DLQ-quarantine" --message-retention-period-secs "$RETENTION"
+
+# --batch-size 5 matches the max_batch_size the regular consumer runs with; the
+# default of 10 is a lot for one invocation at 5–17 s of inference per message.
+wrangler queues consumer add "$DLQ" "$SCRIPT" \
+  --dead-letter-queue "$DLQ-quarantine" --batch-size 5
+
+# ...wait for the backlog to drain, then detach:
+wrangler queues consumer remove "$DLQ" "$SCRIPT"
+```
+
+The replay consumer is deliberately not declared in `wrangler.jsonc` — it exists
+only for the duration of an incident, so nothing will remove it for you. Leaving
+it attached means every later failure gets reprocessed by it instead of landing
+in the DLQ where you can see it.
+
+`$DLQ-quarantine` outlives the incident as well. `queues create` fails if it
+already exists, so on the next incident either reuse it (confirm it is empty
+first — anything left in it is unprocessed feedback) or `wrangler queues delete`
+it once you have dealt with whatever landed there.
+
+Note that DLQ messages carry the full feedback payload, so the DLQ is subject to
+the same handling rules as the private `TrainLCD/Issues` repo.
 
 ## Public repo routing
 
