@@ -8,6 +8,7 @@ import {
 import { bytesToBase64, sha256Hex } from '../lib/crypto';
 import {
   normalizeResponseFormat,
+  parseClientSpeed,
   parsePitch,
   parseSpeed,
   synthesizeSpeech,
@@ -32,6 +33,8 @@ interface TtsRequest {
   textEn?: unknown;
   jaVoiceName?: unknown;
   enVoiceName?: unknown;
+  // アナウンス設定で選んだ読み上げ速度。プリセット外の値は無視される
+  speed?: unknown;
 }
 
 interface TtsConfig {
@@ -170,7 +173,9 @@ export const handleTts = async (
   // 環境変数は文字列なので、送信前に正規化した値を作る。この正規化後の値を
   // そのままキャッシュキーにも使い、設定変更が確実に別 ID になるようにする。
   const responseFormat = normalizeResponseFormat(env.TTS_RESPONSE_FORMAT);
-  const speed = parseSpeed(env.TTS_SPEED);
+  // 速度はアプリの設定を優先し、未指定・プリセット外なら環境変数の既定値を使う。
+  // 速度は computeId に含まれるため、選択が変わればキャッシュも自動的に分かれる。
+  const speed = parseClientSpeed(data.speed) ?? parseSpeed(env.TTS_SPEED);
   const pitch = parsePitch(env.TTS_PITCH);
   const ttsOptions: TtsOptions = { responseFormat, speed, pitch };
 

@@ -1,10 +1,46 @@
 import {
+  ALLOWED_CLIENT_SPEEDS,
   buildSynthesizeRequestBody,
   mimeTypeForFormat,
   normalizeResponseFormat,
+  parseClientSpeed,
   parsePitch,
   parseSpeed,
 } from './tts';
+
+describe('parseClientSpeed', () => {
+  it('accepts the announcement speed presets', () => {
+    for (const speed of ALLOWED_CLIENT_SPEEDS) {
+      expect(parseClientSpeed(speed)).toBe(speed);
+    }
+  });
+
+  it('accepts a preset sent as a string', () => {
+    expect(parseClientSpeed('1.15')).toBe(1.15);
+  });
+
+  it('ignores values outside the presets so the cache cannot be fanned out', () => {
+    // 許可リスト方式。任意の値を通すと同じ文が速度違いで際限なくキャッシュされる
+    for (const speed of [0.9, 1.05, 1.2, 2, 0.25, 4]) {
+      expect(parseClientSpeed(speed)).toBeUndefined();
+    }
+  });
+
+  it('treats missing and malformed values as unspecified', () => {
+    for (const speed of [
+      undefined,
+      null,
+      '',
+      'fast',
+      {},
+      [],
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      expect(parseClientSpeed(speed)).toBeUndefined();
+    }
+  });
+});
 
 describe('buildSynthesizeRequestBody', () => {
   it('sends the plain text with the voice and its locale', () => {

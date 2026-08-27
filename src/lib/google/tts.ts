@@ -79,6 +79,35 @@ export const mimeTypeForFormat = (format?: string): string =>
 export const parseSpeed = (speed?: string | number): number | undefined =>
   parseAudioNumber(speed, 0.25, 4.0);
 
+/**
+ * アプリから届く読み上げ速度として受け付ける値。アナウンス設定のプリセットと
+ * 一対一で対応する。任意の値を通すと同じ文が速度違いで R2/KV に無制限へ積み上がり、
+ * 合成回数（＝文字数課金）もその分だけ増えるため、許可リスト方式にしている。
+ * MobileApp の REMOTE_TTS_SPEED_RATES と必ず一致させること。
+ */
+export const ALLOWED_CLIENT_SPEEDS = [0.85, 1.0, 1.15] as const;
+
+// JSON の数値は 1.15 のように二進で表現しきれない値があるため、厳密比較はしない。
+const SPEED_EPSILON = 1e-6;
+
+/**
+ * リクエストで指定された読み上げ速度を正規化する。許可リストに無い値・不正な値は
+ * 「未指定」として扱い、呼び出し側で環境変数の既定値へ倒す。古いアプリは speed を
+ * 送ってこないため、未指定は正常系であってエラーにはしない。
+ */
+export const parseClientSpeed = (value: unknown): number | undefined => {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return undefined;
+  }
+  const parsed = parseSpeed(value);
+  if (parsed === undefined) {
+    return undefined;
+  }
+  return ALLOWED_CLIENT_SPEEDS.find(
+    (allowed) => Math.abs(allowed - parsed) < SPEED_EPSILON
+  );
+};
+
 /** 声の高さ（セミトーン）を数値へ正規化する。範囲外・非数は未指定として扱う。 */
 export const parsePitch = (pitch?: string | number): number | undefined =>
   parseAudioNumber(pitch, -20.0, 20.0);
