@@ -11,7 +11,7 @@ single Worker.
 - **Feedback intake** (`POST /postFeedback`): enqueues feedback onto the triage queue.
 - **Image upload** (`POST /feedback/upload-image`): stores feedback images in R2 and returns a public URL.
 - **App config delivery** (`GET /config/maintenance`, `GET /config/remote`): maintenance status and GPS thresholds (the replacement for Remote Config).
-- **Feedback triage** (queue `feedback-triage`): summarizes and classifies feedback with Workers AI, then creates a GitHub Issue and notifies Discord. When the AI confidently identifies the component at fault, it also opens a linked stub Issue in the matching public repo (see [public repo routing](#public-repo-routing)).
+- **Feedback triage** (queue `feedback-triage`): summarizes and classifies feedback with Workers AI, then creates a GitHub Issue and notifies Discord. Actionable feedback whose root-cause component the AI identifies confidently also gets a linked stub Issue in the matching public repo (see [public repo routing](#public-repo-routing) for the exact conditions).
 - **TTS cache writes**: synthesized audio is written directly from the `/tts` handler to R2 + KV (no queue is used, because audio does not fit within the 128 KB Queues limit).
 - **Review notifications** (Cron, hourly): notifies Discord of new App Store / Google Play reviews.
 
@@ -263,9 +263,19 @@ well inside the invocation limit.
 Feedback Issues are always created in the private `TrainLCD/Issues` repo with
 the full report (original text, device info, reporter UID, stacktrace, image).
 
-On top of that, when triage identifies the component at fault
-(`component` ≠ unknown and `componentConfidence` ≥ 0.7) the worker opens a stub
-Issue in the matching public repo:
+On top of that, the worker opens a stub Issue in the matching public repo — but
+only when **every** condition in `resolvePublicIssueRepo()` holds:
+
+1. `reportType` is `feedback` (crash reports are never routed — their stacktraces
+   are not vetted for public disclosure),
+2. triage succeeded (`triageFailed === false`) and the report is not spam,
+3. the heuristic did not flag it for human review (`needsSpamReview !== true`),
+4. `category` is one of `PUBLIC_ISSUE_CATEGORIES` — `bug`, `improvement`,
+   `feature_request` (so `question` and `praise` are excluded), and
+5. `component` ≠ unknown with `componentConfidence` ≥
+   `PUBLIC_ISSUE_MIN_CONFIDENCE` (0.7).
+
+The component then selects the repo:
 
 | `component`   | repo                 |
 | ------------- | -------------------- |
@@ -278,7 +288,7 @@ Because those repos are public, the stub carries **no feedback content at all** 
 no original text, no AI summary or title, no device info. It only links back to
 the private ticket (`TrainLCD/Issues#<number>` and the ticket ID), and the
 private Issue gets a comment pointing at the public one so both sides are
-traceable. Crash reports, spam, questions and failed triage are never routed.
+traceable.
 
 `OCTOKIT_PAT` therefore needs write access to those four repos on top of
 `TrainLCD/Issues`.

@@ -239,8 +239,9 @@ const BROKEN_TITLE_PATTERNS: readonly {
   // 同一文字の 4 連続・同一語の 3 連続（生成ループ）
   { name: 'char_repeat', test: (t) => /(.)\1{3,}/u.test(t) },
   { name: 'phrase_repeat', test: (t) => /(.{2,4})\1{2,}/u.test(t) },
-  // 助詞の 3 連続（正常な日本語では成立しない）
-  { name: 'particle_run', test: (t) => /[はがのにをでとへも]{3,}/.test(t) },
+  // 同一助詞の 3 連続。「のでは」「のにも」「ものには」のように異なる助詞が連なるのは
+  // 正常な日本語なので対象にしない（誤検知するとトリアージ結果ごと捨ててしまう）
+  { name: 'particle_run', test: (t) => /([はがのにをでとへも])\1{2,}/.test(t) },
 ];
 
 /**
@@ -802,7 +803,22 @@ export const processFeedbackMessage = async (
   let raw: unknown = null;
   let lastResponseLength = 0;
   for (let attempt = 1; attempt <= MAX_TRIAGE_ATTEMPTS; attempt++) {
-    const resp = await runTriage(env, fewshot, report.description, attempt > 1);
+    let resp: unknown = null;
+    try {
+      resp = await runTriage(env, fewshot, report.description, attempt > 1);
+    } catch (err) {
+      // JSON Mode を満たせない場合や AI 側の一時障害では env.AI.run が throw する。
+      // ここで抜けると queue が再試行し、max_retries を使い切った時点でフィードバックが
+      // 消えるため、生成失敗として扱って最終的に「要約失敗」で起票する（原文は残る）。
+      console.warn('feedbackTriage: トリアージの推論呼び出しが失敗（再試行）', {
+        reportId: report.id,
+        attempt,
+        maxAttempts: MAX_TRIAGE_ATTEMPTS,
+        model: env.AI_TRIAGE_MODEL,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
     lastResponseLength = responseLength(resp);
     raw = normalizeTriageResponse(resp);
     if (raw !== null) break;

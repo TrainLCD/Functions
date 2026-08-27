@@ -478,6 +478,9 @@ describe('findBrokenTitleReason', () => {
   it('正常な日本語タイトルは通す', () => {
     for (const title of [
       '自動アナウンスが途中で停止する不具合',
+      // 異なる助詞の連結は正常な日本語（誤検知の回帰テスト）
+      '駅名が反映されないのでは？という報告',
+      'そのものには問題がない旨の報告',
       '路線図のダークモード対応要望',
       '特定駅が検索に出ず駅名表記も誤り',
       'オートモード時に駅ナンバリングがずれる',
@@ -503,7 +506,7 @@ describe('findBrokenTitleReason', () => {
     expect(findBrokenTitleReason('表示表示表示がおかしい')).toBe(
       'phrase_repeat'
     );
-    expect(findBrokenTitleReason('駅名がにをで変わる')).toBe('particle_run');
+    expect(findBrokenTitleReason('駅名ををを変わる')).toBe('particle_run');
     expect(findBrokenTitleReason('역명이 잘못 표시됨')).toBe('foreign_script');
   });
 
