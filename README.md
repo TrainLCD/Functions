@@ -311,6 +311,7 @@ and be deleted outright, which is the exact loss this section exists to prevent.
 # production. For dev: DLQ=feedback-triage-dev-dlq, SCRIPT=trainlcd-worker-dev
 DLQ=feedback-triage-dlq
 SCRIPT=trainlcd-worker
+RETENTION=1209600   # 86400 on the free tier, as above
 
 wrangler queues info "$DLQ"    # backlog size, current consumers
 
