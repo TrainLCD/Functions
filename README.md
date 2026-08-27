@@ -282,6 +282,18 @@ The consumers therefore declare `dead_letter_queue` (`feedback-triage-dlq`, and
 `feedback-triage-dev-dlq` for dev). The DLQ intentionally has **no consumer** —
 running the same handler against it would fail for the same reason.
 
+Do not look for the wiring on the DLQ itself. Moving a message into a DLQ is
+something Cloudflare does internally, not something the Worker sends, so a
+correctly configured DLQ still reports zero producers and zero consumers in
+`wrangler queues list`. The link lives on the **source** queue's consumer, and it
+only exists once the config has been deployed:
+
+```bash
+wrangler queues consumer list feedback-triage-dev   # or feedback-triage for prod
+# dead_letter_queue must name the DLQ; "-" means this environment is still
+# dropping messages once max_retries is exhausted.
+```
+
 **A DLQ is not archival storage.** Messages sitting in it expire on the queue's
 retention period, which both DLQs inherit from the account default (4 days on a
 paid plan, and not extendable beyond 24 h on the free plan). That is the replay
