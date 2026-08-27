@@ -289,10 +289,13 @@ deadline: once it passes the feedback is gone just as surely as it was before
 this queue existed. Check and extend it if an incident may outlast it:
 
 ```bash
-# 14 days is the maximum. Run this for the dev DLQ too — retention is per queue,
-# and feedback-triage-dev-dlq does not inherit anything from the prod one.
+# 1209600 = 14 days, the paid-plan maximum. The free tier is capped at 86400
+# (24 h) and rejects anything above it, so use that value instead on free.
+# Run this for the dev DLQ too — retention is per queue, and
+# feedback-triage-dev-dlq inherits nothing from the prod one.
+RETENTION=1209600
 for q in feedback-triage-dlq feedback-triage-dev-dlq; do
-  wrangler queues update "$q" --message-retention-period-secs 1209600
+  wrangler queues update "$q" --message-retention-period-secs "$RETENTION"
 done
 ```
 
@@ -309,9 +312,16 @@ and be deleted outright, which is the exact loss this section exists to prevent.
 DLQ=feedback-triage-dlq
 SCRIPT=trainlcd-worker
 
-wrangler queues info "$DLQ"                 # backlog size, current consumers
-wrangler queues create "$DLQ-quarantine"    # catches whatever still fails on replay
-wrangler queues consumer add "$DLQ" "$SCRIPT" --dead-letter-queue "$DLQ-quarantine"
+wrangler queues info "$DLQ"    # backlog size, current consumers
+
+# Catches whatever still fails on replay. Give it the same retention as the DLQ,
+# otherwise it silently falls back to the account default.
+wrangler queues create "$DLQ-quarantine" --message-retention-period-secs "$RETENTION"
+
+# --batch-size 5 matches the max_batch_size the regular consumer runs with; the
+# default of 10 is a lot for one invocation at 5–17 s of inference per message.
+wrangler queues consumer add "$DLQ" "$SCRIPT" \
+  --dead-letter-queue "$DLQ-quarantine" --batch-size 5
 
 # ...wait for the backlog to drain, then detach:
 wrangler queues consumer remove "$DLQ" "$SCRIPT"
@@ -321,6 +331,11 @@ The replay consumer is deliberately not declared in `wrangler.jsonc` — it exis
 only for the duration of an incident, so nothing will remove it for you. Leaving
 it attached means every later failure gets reprocessed by it instead of landing
 in the DLQ where you can see it.
+
+`$DLQ-quarantine` outlives the incident as well. `queues create` fails if it
+already exists, so on the next incident either reuse it (confirm it is empty
+first — anything left in it is unprocessed feedback) or `wrangler queues delete`
+it once you have dealt with whatever landed there.
 
 Note that DLQ messages carry the full feedback payload, so the DLQ is subject to
 the same handling rules as the private `TrainLCD/Issues` repo.
