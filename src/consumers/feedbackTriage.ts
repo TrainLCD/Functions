@@ -5,12 +5,39 @@
 import dayjs from 'dayjs';
 import type {
   AICategory,
+  AIComponent,
   AIReport,
   AITriageLevel,
   FewShotItem,
 } from '../models/ai';
 import type { DiscordEmbed } from '../models/common';
+import type { Report } from '../models/feedback';
 import type { Env, FeedbackQueueMessage } from '../types';
+
+/** フィードバック原本を保管する非公開リポジトリ */
+const INTERNAL_REPO = 'TrainLCD/Issues';
+
+/**
+ * 原因コンポーネント → 起票先の公開リポジトリ。
+ * 公開リポジトリなのでフィードバックの内容は一切載せず、非公開の管理チケットへの
+ * 参照（Issue 番号・チケットID）だけを持つスタブ Issue を立てる。
+ */
+const COMPONENT_REPOS: Record<AIComponent, string> = {
+  mobile_app: 'TrainLCD/MobileApp',
+  station_api: 'TrainLCD/StationAPI',
+  functions: 'TrainLCD/Functions',
+  website: 'TrainLCD/Website',
+};
+
+/** 原因コンポーネントを信用して公開リポジトリに起票する最低信頼度 */
+export const PUBLIC_ISSUE_MIN_CONFIDENCE = 0.7;
+
+/** 公開リポジトリへ転記する対象カテゴリ（質問は原因特定の対象外） */
+const PUBLIC_ISSUE_CATEGORIES: readonly AICategory[] = [
+  'bug',
+  'improvement',
+  'feature_request',
+];
 
 const GITHUB_LABELS = {
   PLATFORM_IOS: '🍎 iOS',
@@ -29,6 +56,7 @@ const GITHUB_LABELS = {
   CATEGORY_FEATURE_REQUEST: '✨ Feature Request',
   CATEGORY_IMPROVEMENT: '🛠️ Improvement',
   CATEGORY_QUESTION: '❓ Question',
+  CATEGORY_PRAISE: '💚 Praise',
   TRIAGE_URGENT: '🔴 P0 / Urgent',
   TRIAGE_HIGH: '🟠 P1 / High',
   TRIAGE_MEDIUM: '🟡 P2 / Medium',
@@ -40,6 +68,7 @@ const CATEGORY_LABELS: Record<AICategory, string> = {
   feature_request: GITHUB_LABELS.CATEGORY_FEATURE_REQUEST,
   improvement: GITHUB_LABELS.CATEGORY_IMPROVEMENT,
   question: GITHUB_LABELS.CATEGORY_QUESTION,
+  praise: GITHUB_LABELS.CATEGORY_PRAISE,
 };
 
 const TRIAGE_LABELS: Record<AITriageLevel, string> = {
@@ -63,6 +92,35 @@ const CATEGORY_SYNONYMS: Record<string, AICategory> = {
   question: 'question',
   support: 'question',
   help: 'question',
+  praise: 'praise',
+  thanks: 'praise',
+  thankyou: 'praise',
+  gratitude: 'praise',
+  compliment: 'praise',
+  kudos: 'praise',
+  positive: 'praise',
+};
+
+// モデルは enum 外の表記（"MobileApp" / "ios" / "web" など）を返すことがあるため、
+// 区切り文字を除去したキーで正規化する。未知の値は null（＝原因未特定）に落とす。
+const COMPONENT_SYNONYMS: Record<string, AIComponent> = {
+  mobileapp: 'mobile_app',
+  mobile: 'mobile_app',
+  app: 'mobile_app',
+  client: 'mobile_app',
+  ios: 'mobile_app',
+  android: 'mobile_app',
+  stationapi: 'station_api',
+  station: 'station_api',
+  stationdata: 'station_api',
+  functions: 'functions',
+  function: 'functions',
+  worker: 'functions',
+  workers: 'functions',
+  website: 'website',
+  web: 'website',
+  site: 'website',
+  homepage: 'website',
 };
 
 const TRIAGE_SYNONYMS: Record<string, AITriageLevel> = {
@@ -79,25 +137,44 @@ const TRIAGE_SYNONYMS: Record<string, AITriageLevel> = {
   p3: 'low',
 };
 
+/**
+ * 不具合・要望の報告で使われる語彙。これが出たら車内放送の書き起こしではないと
+ * 断定してよいので、スコアリングに入る前に非スパムとして返す。
+ * 「〜が違います」「反映されない」「〜してほしい」のように、報告者が「不具合」「要望」と
+ * いう語を使わずに書くケースを取りこぼさないことを重視している。
+ */
+const ACTIONABLE =
+  /(修正|改善|追加|希望|要望|不具合|バグ|誤|間違|違い|違う|反映|表示|保存|再生|遅|遅延|できない|出来ない|できません|出来ません|されない|されません|しない|しません|エラー|落ちる|クラッシュ|重複|ズレ|ずれ|おかしい|ほしい|欲しい|直し|なおし|音がない|読み上げない)/;
+
+/**
+ * 車内放送でも報告文でも使われる言い回し。単独では判断できないため早期リターンには
+ * 使わず、スパムスコアの減点に留める（正当な報告を握りつぶす方が、スパムを 1 件
+ * 通すより損失が大きいという方針）。
+ */
+const WEAK_ACTIONABLE = /(になります|になっています|になってます|されています)/;
+
+/** 車内放送の定型句。書き起こし判定の主シグナル */
+const ANNOUNCEMENT_PHRASE =
+  /(次は|まもなく|この(列車|電車)は|行きです|ご利用ありがとうございます|お出口は(左|右)側です|各駅に(停ま|止ま)ります|お乗り換え)/;
+
 export function looksLikeSpam(text: string): boolean {
   if (!text) return false;
   const t = String(text).replace(/\s+/g, ' ').trim();
 
-  const ACTIONABLE =
-    /(修正|改善|追加|希望|要望|不具合|バグ|誤|間違い|表示|保存|再生|遅|遅延|できない|出来ない|エラー|落ちる|クラッシュ|重複|ズレ|音がない|読み上げない)/;
   if (ACTIONABLE.test(t)) return false;
 
   let score = 0;
 
-  if (
-    /(次は|まもなく|この(列車|電車)は|行きです|ご利用ありがとうございます|お出口は(左|右)側です|各駅に(停ま|止ま)ります|お乗り換え)/.test(
-      t
-    )
-  ) {
+  const hasAnnouncementPhrase = ANNOUNCEMENT_PHRASE.test(t);
+  if (hasAnnouncementPhrase) {
     score += 1;
   }
-  if (/(停車駅|方面)/.test(t)) score += 1;
+  // 「停車駅」「方面」「駅名・路線名の併記」はいずれも本アプリのドメイン語彙そのもので、
+  // データ不備の報告に普通に現れる。放送の定型句と共起したときだけ書き起こしの
+  // シグナルとして扱う（単独加点だと、正確な報告ほどスパム判定されてしまう）。
+  if (hasAnnouncementPhrase && /(停車駅|方面)/.test(t)) score += 1;
   if (
+    hasAnnouncementPhrase &&
     /([一-龥ァ-ヶー]{2,})(、|,|・|\s)([一-龥ァ-ヶー]{2,})/.test(t) &&
     /(停車|次は|方面)/.test(t)
   ) {
@@ -118,7 +195,73 @@ export function looksLikeSpam(text: string): boolean {
   if (/[🚃🚇🚈♪🎵]/u.test(t)) {
     score += 0.5;
   }
+  if (WEAK_ACTIONABLE.test(t)) score -= 1;
   return score >= 2;
+}
+
+/** モデルがタイトルを返さなかったときの穴埋め文言 */
+export const MISSING_TITLE = '要約未取得';
+
+/**
+ * 日本語として成立しない生成タイトルのパターン。
+ * 小型モデルは日本語生成が破綻することがあり、破損タイトルのまま起票すると
+ * Issue 一覧から内容を判別できなくなる（= バックログの一次スクリーニングが機能しない）。
+ * 誤検知するとまともなタイトルまで「要約失敗」に落としてしまうため、
+ * 正常な日本語では起こり得ないものだけを列挙する。
+ */
+const BROKEN_TITLE_PATTERNS: readonly {
+  name: string;
+  test: (title: string) => boolean;
+}[] = [
+  // 文字化け（U+FFFD）・制御文字
+  { name: 'replacement_char', test: (t) => /\uFFFD/.test(t) },
+  {
+    name: 'control_char',
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字の混入そのものを検知する
+    test: (t) => /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(t),
+  },
+  // 日本語アプリのタイトルに現れない文字体系（ギリシャ・キリル・ヘブライ・アラビア・
+  // デーヴァナーガリー・タイ・ハングル）
+  {
+    name: 'foreign_script',
+    test: (t) =>
+      /[\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\uAC00-\uD7AF]/.test(
+        t
+      ),
+  },
+  // UTF-8 を Shift_JIS として解釈したときに出る典型的な文字化け漢字。現代日本語では
+  // ほぼ使われない字なので、連続していなくても 2 文字あれば破損とみなす
+  {
+    name: 'mojibake_kanji',
+    test: (t) =>
+      (t.match(/[縺繧繝蜿蛻髢讌荳陦莠譌蟄蜀隱蠢遘蜷ｺｻ]/g) ?? []).length >= 2,
+  },
+  // 同一文字の 4 連続・同一語の 3 連続（生成ループ）
+  { name: 'char_repeat', test: (t) => /(.)\1{3,}/u.test(t) },
+  { name: 'phrase_repeat', test: (t) => /(.{2,4})\1{2,}/u.test(t) },
+  // 助詞の 3 連続（正常な日本語では成立しない）
+  { name: 'particle_run', test: (t) => /[はがのにをでとへも]{3,}/.test(t) },
+];
+
+/**
+ * 生成タイトルが起票に使えない（未取得 or 日本語として破損している）かを判定する。
+ * true のときは破損タイトルのまま起票せず、失敗を明示したレポートに倒す。
+ */
+export function findBrokenTitleReason(title: string): string | null {
+  const t = String(title ?? '').trim();
+  if (!t) return 'empty';
+  if (t === MISSING_TITLE) return 'missing';
+  // 記号・空白だけのタイトル
+  if (!/[\p{L}\p{N}]/u.test(t)) return 'no_word_char';
+  for (const { name, test } of BROKEN_TITLE_PATTERNS) {
+    if (test(t)) return name;
+  }
+  return null;
+}
+
+/** findBrokenTitleReason の真偽値版 */
+export function isUnusableTitle(title: string): boolean {
+  return findBrokenTitleReason(title) !== null;
 }
 
 export function coerceReport(raw: unknown, titleMax = 72): AIReport {
@@ -156,12 +299,23 @@ export function coerceReport(raw: unknown, titleMax = 72): AIReport {
     .toLowerCase()
     .replaceAll(/[\s-]+/g, '');
   const triageLevel: AITriageLevel = TRIAGE_SYNONYMS[triageKey] ?? 'medium';
+  const componentKey = getStr('component')
+    .toLowerCase()
+    .replaceAll(/[\s_-]+/g, '');
+  const component: AIComponent | null =
+    COMPONENT_SYNONYMS[componentKey] ?? null;
+  // 原因が特定できていないのに信頼度だけ高い、という応答を弾くため component とセットで扱う
+  const componentConfidence = component ? getNum('componentconfidence', 0) : 0;
 
-  if (!title) title = '要約未取得';
+  if (!title) title = MISSING_TITLE;
   if (title.length > titleMax) title = `${title.slice(0, titleMax - 1)}…`;
   // 要約が空だと Issue 本文の節が空になり、Discord embed も value 空でリジェクトされるため
-  // タイトルにフォールバックして常に何らかのテキストを入れる
-  if (!summary) summary = title;
+  // 常に何らかのテキストを入れる。ただしタイトルが未取得・破損しているときにそれを
+  // 要約へ伝播させると、タイトルと要約の両方が同時に壊れて内容が判別できなくなるため、
+  // その場合は失敗を明示する文言に倒す。
+  if (!summary) {
+    summary = isUnusableTitle(title) ? TRIAGE_FAILED_SUMMARY : title;
+  }
 
   return {
     title,
@@ -172,6 +326,8 @@ export function coerceReport(raw: unknown, titleMax = 72): AIReport {
     reason,
     category,
     triageLevel,
+    component,
+    componentConfidence,
   };
 }
 
@@ -256,6 +412,53 @@ export function buildFailedReport(
     reason: 'triage_failed',
     category: 'question',
     triageLevel: 'medium',
+    component: null,
+    componentConfidence: 0,
+  };
+}
+
+/**
+ * ヒューリスティックがモデルの非スパム判定を覆せる、モデル側 confidence の上限。
+ * これ以上の確信度でモデルが「スパムではない」と言っているときは、ヒューリスティックは
+ * 上書きせず人手確認のマーカーだけを付ける。
+ */
+export const SPAM_OVERRIDE_MAX_CONFIDENCE = 0.5;
+
+/** スパム上書き時に使う、内容を判別できないことを示すタイトル */
+export const NON_ACTIONABLE_TITLE = '内容未分類（改善要望なし）';
+
+/**
+ * looksLikeSpam の結果をレポートに反映する。
+ *
+ * ヒューリスティックは補助でしかなく、正当な報告を握りつぶすと利用者の声が
+ * 完全に失われる（ラベルもカテゴリも消えて候補プールから脱落する）。そのため
+ * モデルが確信を持って「スパムではない」と判定しているときは分類をそのまま残し、
+ * 人手確認用のマーカー（needsSpamReview）だけを立てる。
+ */
+export function applySpamHeuristic(
+  aiReport: AIReport,
+  description: string,
+  opts: { triageFailed: boolean }
+): { report: AIReport; needsSpamReview: boolean } {
+  // トリアージ自体が失敗しているレポートは、そもそもモデルの判定が無い。
+  // ここでスパムに倒すと「要約失敗」の事実が消えるため触らない。
+  if (opts.triageFailed) return { report: aiReport, needsSpamReview: false };
+  if (aiReport.isSpam) return { report: aiReport, needsSpamReview: false };
+  if (!looksLikeSpam(description)) {
+    return { report: aiReport, needsSpamReview: false };
+  }
+  if (aiReport.confidence >= SPAM_OVERRIDE_MAX_CONFIDENCE) {
+    return { report: aiReport, needsSpamReview: true };
+  }
+  return {
+    report: {
+      ...aiReport,
+      title: NON_ACTIONABLE_TITLE,
+      isSpam: true,
+      labels: [],
+      reason: 'non-actionable',
+    },
+    needsSpamReview: false,
   };
 }
 
@@ -265,35 +468,47 @@ Task:
 1. Summarize the user's message into a ONE-LINE issue title in Japanese (≤72 chars).
 2. Also create a 1–3 sentence summary in Japanese that concisely describes the feedback content.
 3. Classify spam.
-4. If NOT spam, pick ONE primary "category" from ["bug","feature_request","improvement","question"]:
+4. If NOT spam, pick ONE primary "category" from ["bug","feature_request","improvement","question","praise"]:
    - bug: 不具合・誤動作・クラッシュ・表示崩れ
    - feature_request: まだ存在しない機能の新規要望
    - improvement: 既存機能の改善・調整
    - question: 質問・使い方の確認・情報要求
+   - praise: 感謝・称賛・応援のみで、対応すべき要望を含まないもの
 5. If NOT spam, pick ONE "triageLevel" from ["urgent","high","medium","low"]:
    - urgent: クラッシュ・データ消失・広範な実用不能
    - high: 特定機能が使えない／重要機能要望
    - medium: 通常の改善・軽微なバグ
-   - low: 体裁の問題・質問・軽い要望
-   If spam, omit "category" and "triageLevel" entirely.
+   - low: 体裁の問題・質問・軽い要望・感謝や称賛
+   If spam, still output "category": "question" and "triageLevel": "low" (they are ignored for spam).
+6. If NOT spam, decide WHICH component the root cause most likely lives in, as "component":
+   - "mobile_app": TrainLCD の iOS/Android アプリ本体（画面表示・UI・音声再生・クラッシュ・設定・位置情報の挙動）
+   - "station_api": 駅・路線・種別のデータや検索結果（駅名の誤り・駅の欠落・路線データの誤り）
+   - "functions": バックエンド Workers（AIチャット・音声合成・フィードバック送信・画像アップロード・API エラー）
+   - "website": 公式サイト（trainlcd.app）
+   Use "unknown" when the message does not clearly point at one component.
+   Also output "componentConfidence" (0..1) for how sure you are about "component".
+   Use a value below 0.7 unless the message clearly identifies the responsible component.
+   If spam, output "component": "unknown". Always output "componentConfidence" (0 when "unknown").
 
 Rules:
 - Newspaper-style headline: [症状/論点]+[対象]（助詞は最小限）
 - No device/OS/version/URL/stack unless essential
 - Prefer Japanese if input has Japanese
-- If no actionable content (announcement transcript, chit-chat, praise-only), mark spam
+- Mark spam ONLY for content unrelated to improving the app: 車内放送の書き起こし、無関係な雑談、宣伝・荒らし
+- NEVER mark gratitude, praise or encouragement as spam. Even with nothing to fix, it is a real message from a real user: set isSpam=false and category="praise"
 - If not spam, pick labels from:
   ["bug","improvement","feature","localization","location","ui","performance","network","settings"]
 
 Output JSON only:
-{"title": "...", "summary": "...", "isSpam": true|false, "labels": [], "category": "...", "triageLevel": "...", "confidence": 0..1, "reason": "..."}
+{"title": "...", "summary": "...", "isSpam": true|false, "labels": [], "category": "...", "triageLevel": "...", "component": "...", "componentConfidence": 0..1, "confidence": 0..1, "reason": "..."}
 
 Return ONLY that JSON. No prose, no markdown.
 `.trim();
 
 // Workers AI の JSON Mode（response_format）に渡すスキーマ。
 // summary を required にして「フィールド欠落で要約が空」になるのを構造的に防ぐ。
-// category / triageLevel はスパム時に省ける運用なので optional のまま。
+// スパム時も含めて全フィールドを必須にし、フィールド欠落による既定値落ちを防ぐ
+// （スパム判定時の category / triageLevel は起票側で無視する）。
 const TRIAGE_JSON_SCHEMA = {
   type: 'object',
   properties: {
@@ -303,13 +518,31 @@ const TRIAGE_JSON_SCHEMA = {
     labels: { type: 'array', items: { type: 'string' } },
     category: {
       type: 'string',
-      enum: ['bug', 'feature_request', 'improvement', 'question'],
+      enum: ['bug', 'feature_request', 'improvement', 'question', 'praise'],
     },
     triageLevel: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'] },
+    component: {
+      type: 'string',
+      enum: ['mobile_app', 'station_api', 'functions', 'website', 'unknown'],
+    },
+    componentConfidence: { type: 'number' },
     confidence: { type: 'number' },
     reason: { type: 'string' },
   },
-  required: ['title', 'summary', 'isSpam', 'labels', 'confidence', 'reason'],
+  // category / triageLevel を optional にしていたため、モデルが省略した非スパムの
+  // レポートが軒並み既定値（question / medium）に落ちていた。常に出力させる。
+  required: [
+    'title',
+    'summary',
+    'isSpam',
+    'labels',
+    'category',
+    'triageLevel',
+    'component',
+    'componentConfidence',
+    'confidence',
+    'reason',
+  ],
 } as const;
 
 // ---- Few-shot loader（CONFIG_KV） ----
@@ -376,17 +609,37 @@ async function runTriage(
     ? '\n\nIMPORTANT: Output exactly ONE minified JSON object and nothing else. Do not repeat the examples. Do not add prose, comments, or code fences.'
     : '';
   const prompt = `${fewshot}\n\nNow process this message:\n\n<<FEEDBACK>>\n${userText}`;
-  const result = (await env.AI.run(env.AI_TRIAGE_MODEL, {
+  const result = await env.AI.run(env.AI_TRIAGE_MODEL, {
     messages: [
       { role: 'system', content: SYSTEM_PROMPT + strictNudge },
       { role: 'user', content: prompt },
     ],
-    max_tokens: 768,
+    // 推論トレースを出すモデル（gemma-4 など）は本文の前に思考を吐くため、
+    // 768 だと JSON が途中で切れる（finish_reason: "length"）。実測で完了まで
+    // 900〜1100 トークン使うので余裕を持たせる。
+    max_tokens: 2048,
     temperature: strict ? 0 : 0.2,
     // JSON Schema を強制し、summary などのフィールド欠落を防ぐ。
     response_format: { type: 'json_schema', json_schema: TRIAGE_JSON_SCHEMA },
-  })) as { response?: unknown };
-  return result?.response ?? null;
+  });
+  return pickModelResponse(result);
+}
+
+/**
+ * Workers AI の応答から本文を取り出す。モデルによって形が 2 通りある。
+ * - `response`: 従来の Workers AI 形式（パース済みオブジェクト or 文字列）
+ * - `choices[0].message.content`: OpenAI 互換形式（gemma-4 などはこちらのみ）
+ * 片方しか見ないとモデル差し替え時に全件トリアージ失敗になるため、両方を受ける。
+ */
+export function pickModelResponse(result: unknown): unknown | null {
+  if (!result || typeof result !== 'object') return null;
+  const r = result as {
+    response?: unknown;
+    choices?: { message?: { content?: unknown } }[];
+  };
+  if (r.response !== undefined && r.response !== null) return r.response;
+  const content = r.choices?.[0]?.message?.content;
+  return content ?? null;
 }
 
 /** runTriage の戻り（オブジェクト or 文字列）からトリアージ JSON を取り出す。 */
@@ -403,6 +656,135 @@ function normalizeTriageResponse(resp: unknown): unknown | null {
 function responseLength(resp: unknown): number {
   const s = typeof resp === 'string' ? resp : JSON.stringify(resp ?? null);
   return s.length;
+}
+
+// ---- GitHub Issue 作成 ----
+
+/** GitHub REST API への POST（Issue 作成・コメント投稿の共通処理）。 */
+function githubPost(env: Env, path: string, body: unknown): Promise<Response> {
+  return fetch(`https://api.github.com/repos/${path}`, {
+    method: 'post',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${env.OCTOKIT_PAT ?? ''}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'trainlcd-worker',
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * 原因が特定できているフィードバックについて、起票先の公開リポジトリを返す。
+ * 特定できていない・公開に適さない場合は null（＝非公開リポジトリのみに起票）。
+ *
+ * - クラッシュレポートは対象外（スタックトレースを含み、内容の公開範囲が読めないため）
+ * - スパム／スパム疑い／トリアージ失敗は原因を特定できていないので対象外
+ * - 質問カテゴリは修正対象のコンポーネントが定まらないので対象外
+ */
+export function resolvePublicIssueRepo(
+  aiReport: AIReport,
+  opts: {
+    reportType: Report['reportType'];
+    triageFailed: boolean;
+    needsSpamReview?: boolean;
+  }
+): string | null {
+  if (opts.reportType !== 'feedback') return null;
+  if (opts.triageFailed || aiReport.isSpam) return null;
+  // スパム疑いで人手確認待ちのものを公開リポジトリに出さない
+  if (opts.needsSpamReview) return null;
+  if (!PUBLIC_ISSUE_CATEGORIES.includes(aiReport.category)) return null;
+  if (!aiReport.component) return null;
+  if (aiReport.componentConfidence < PUBLIC_ISSUE_MIN_CONFIDENCE) return null;
+  return COMPONENT_REPOS[aiReport.component];
+}
+
+/**
+ * 公開リポジトリに立てるスタブ Issue のタイトル。
+ * 公開範囲にフィードバックの内容を出さないため、AI 要約もタイトルも使わず、
+ * 非公開の管理 Issue 番号だけで表現する。
+ */
+export function buildPublicIssueTitle(internalIssueNumber: number): string {
+  return `フィードバック対応: ${INTERNAL_REPO}#${internalIssueNumber}`;
+}
+
+/**
+ * 公開リポジトリに立てるスタブ Issue の本文。
+ * 意図的に、フィードバックの原文・AI 要約・タイトル・端末情報を一切含めない。
+ * 内容を追うための手掛かりは非公開の管理チケットへの参照だけに限定する。
+ */
+export function buildPublicIssueBody(params: {
+  internalIssueNumber: number;
+  ticketId: string;
+}): string {
+  const { internalIssueNumber, ticketId } = params;
+  return `
+アプリから届いたフィードバックのトリアージで、原因が本リポジトリにあると推定されたため起票しています。
+
+フィードバックの内容は公開リポジトリには掲載していません。原文・要約・端末情報などの詳細は、下記の非公開の管理チケットを参照してください。
+
+## 管理チケット
+- Issue: ${INTERNAL_REPO}#${internalIssueNumber}
+- チケットID: \`${ticketId}\`
+`.trim();
+}
+
+/**
+ * 公開リポジトリへスタブ Issue を作成し、その URL を返す（失敗時は null）。
+ * ここで throw すると queue が再試行して非公開 Issue が重複作成されるため、
+ * 失敗はログに留める。
+ */
+async function createPublicIssue(
+  env: Env,
+  params: { repo: string; internalIssueNumber: number; ticketId: string }
+): Promise<string | null> {
+  const { repo, internalIssueNumber, ticketId } = params;
+  try {
+    // ラベルは公開リポジトリ側に存在しないと自動生成されてしまうため付けない。
+    // 分類・優先度は非公開の管理 Issue 側のラベルで管理する。
+    const res = await githubPost(env, `${repo}/issues`, {
+      title: buildPublicIssueTitle(internalIssueNumber),
+      body: buildPublicIssueBody({ internalIssueNumber, ticketId }),
+      assignees: ['TinyKitten'],
+    });
+    if (res.status !== 201) {
+      console.error('公開リポジトリへの起票に失敗', {
+        repo,
+        status: res.status,
+        internalIssueNumber,
+      });
+      return null;
+    }
+    const created = (await res.json()) as { html_url: string };
+    return created.html_url;
+  } catch (err) {
+    console.error('公開リポジトリへの起票に失敗', { repo, err });
+    return null;
+  }
+}
+
+/** 非公開の管理 Issue 側に、公開 Issue へのリンクをコメントで残す（失敗しても無視）。 */
+async function linkPublicIssue(
+  env: Env,
+  internalIssueNumber: number,
+  publicIssueUrl: string
+): Promise<void> {
+  try {
+    const res = await githubPost(
+      env,
+      `${INTERNAL_REPO}/issues/${internalIssueNumber}/comments`,
+      { body: `公開リポジトリに対応 Issue を起票しました: ${publicIssueUrl}` }
+    );
+    if (res.status !== 201) {
+      console.error('管理 Issue への相互リンクコメントに失敗', {
+        status: res.status,
+        internalIssueNumber,
+      });
+    }
+  } catch (err) {
+    console.error('管理 Issue への相互リンクコメントに失敗', { err });
+  }
 }
 
 export const processFeedbackMessage = async (
@@ -432,7 +814,7 @@ export const processFeedbackMessage = async (
     });
   }
 
-  const triageFailed = raw === null;
+  let triageFailed = raw === null;
   let aiReport: AIReport;
   if (triageFailed) {
     // 生成に失敗しても破棄しない。原文を保全したまま、要約欄に失敗を明示して起票する。
@@ -451,21 +833,41 @@ export const processFeedbackMessage = async (
           )?.[1]
         : undefined;
     if (!aiReport.isSpam && String(rawSummary ?? '').trim() === '') {
+      console.warn('feedbackTriage: モデルが summary を空/欠落で返却', {
+        reportId: report.id,
+        responseLength: lastResponseLength,
+      });
+    }
+
+    // タイトルが未取得・日本語として破損している場合は、そのまま起票すると
+    // Issue 一覧から内容を判別できない。失敗を明示するレポートに倒したうえで
+    // ❓ Unknown Type を付け、破損率を追えるようにログを残す。
+    const brokenTitleReason = findBrokenTitleReason(aiReport.title);
+    if (brokenTitleReason) {
       console.warn(
-        'feedbackTriage: モデルが summary を空/欠落で返却（title にフォールバック）',
-        { reportId: report.id, responseLength: lastResponseLength }
+        'feedbackTriage: 生成タイトルが使用不能（要約失敗として起票）',
+        {
+          reportId: report.id,
+          reason: brokenTitleReason,
+          model: env.AI_TRIAGE_MODEL,
+          responseLength: lastResponseLength,
+        }
       );
+      aiReport = buildFailedReport(report.description, 72);
+      triageFailed = true;
     }
   }
 
-  if (!aiReport.isSpam && looksLikeSpam(report.description)) {
-    aiReport = {
-      ...aiReport,
-      title: '内容未分類（改善要望なし）',
-      isSpam: true,
-      labels: [],
-      reason: 'non-actionable',
-    };
+  const spamDecision = applySpamHeuristic(aiReport, report.description, {
+    triageFailed,
+  });
+  aiReport = spamDecision.report;
+  const { needsSpamReview } = spamDecision;
+  if (needsSpamReview) {
+    console.warn(
+      'feedbackTriage: スパム判定がモデルとヒューリスティックで不一致（人手確認に回す）',
+      { reportId: report.id, confidence: aiReport.confidence }
+    );
   }
 
   const {
@@ -508,19 +910,9 @@ export const processFeedbackMessage = async (
     : undefined;
 
   try {
-    const res = await fetch(
-      'https://api.github.com/repos/TrainLCD/Issues/issues',
-      {
-        method: 'post',
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${env.OCTOKIT_PAT ?? ''}`,
-          'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'trainlcd-worker',
-        },
-        body: JSON.stringify({
-          title: aiReport.title ?? '要約未取得',
-          body: `
+    const res = await githubPost(env, `${INTERNAL_REPO}/issues`, {
+      title: aiReport.title ?? '要約未取得',
+      body: `
 ![Image](${imageUrl})
 
 
@@ -530,6 +922,9 @@ ${'```'}
 
 ## AIによる要約
 ${aiReport.summary}
+
+## チケットID
+${id}
 
 ## 発行日時
 ${createdAtText}
@@ -563,33 +958,54 @@ ${sentryEventId}
 ## レポーターUID
 ${reporterUid}
         `.trim(),
-          assignees: ['TinyKitten'],
-          milestone: null,
-          labels: [
-            reportType === 'feedback' &&
-              !aiReport.isSpam &&
-              GITHUB_LABELS.FEEDBACK_TYPE,
-            reportType === 'crash' && GITHUB_LABELS.CRASH_TYPE,
-            appEdition === 'production' && GITHUB_LABELS.PRODUCTION_APP,
-            appEdition === 'canary' && GITHUB_LABELS.CANARY_APP,
-            appClip && GITHUB_LABELS.PLATFORM_APPCLIP,
-            aiReport.isSpam && GITHUB_LABELS.SPAM_TYPE,
-            triageFailed && GITHUB_LABELS.UNKNOWN_TYPE,
-            osNameLabel,
-            autoModeLabel,
-            categoryLabel,
-            triageLabel,
-          ].filter(Boolean),
-        }),
-      }
-    );
+      assignees: ['TinyKitten'],
+      milestone: null,
+      labels: [
+        reportType === 'feedback' &&
+          !aiReport.isSpam &&
+          GITHUB_LABELS.FEEDBACK_TYPE,
+        reportType === 'crash' && GITHUB_LABELS.CRASH_TYPE,
+        appEdition === 'production' && GITHUB_LABELS.PRODUCTION_APP,
+        appEdition === 'canary' && GITHUB_LABELS.CANARY_APP,
+        appClip && GITHUB_LABELS.PLATFORM_APPCLIP,
+        aiReport.isSpam && GITHUB_LABELS.SPAM_TYPE,
+        (triageFailed || needsSpamReview) && GITHUB_LABELS.UNKNOWN_TYPE,
+        osNameLabel,
+        autoModeLabel,
+        categoryLabel,
+        triageLabel,
+      ].filter(Boolean),
+    });
 
     if (res.status !== 201) {
       console.error(await res.json());
       throw new Error(`GitHub API failed with status ${res.status}`);
     }
 
-    const issuesRes = (await res.json()) as { html_url: string };
+    const issuesRes = (await res.json()) as {
+      html_url: string;
+      number: number;
+    };
+
+    // 原因コンポーネントが特定できている場合のみ、該当の公開リポジトリにも起票する。
+    // 公開側に載せるのは管理 Issue 番号とチケットIDだけで、フィードバックの内容は含めない。
+    // 起票後は管理 Issue 側にもコメントでリンクを残し、双方向に追えるようにする。
+    const publicRepo = resolvePublicIssueRepo(aiReport, {
+      reportType,
+      triageFailed,
+      needsSpamReview,
+    });
+    let publicIssueUrl: string | null = null;
+    if (publicRepo) {
+      publicIssueUrl = await createPublicIssue(env, {
+        repo: publicRepo,
+        internalIssueNumber: issuesRes.number,
+        ticketId: id,
+      });
+      if (publicIssueUrl) {
+        await linkPublicIssue(env, issuesRes.number, publicIssueUrl);
+      }
+    }
 
     const csWHUrl = env.DISCORD_CS_WEBHOOK_URL;
     const crashWHUrl = env.DISCORD_CRASH_WEBHOOK_URL;
@@ -628,6 +1044,9 @@ ${reporterUid}
                   (autoModeEnabled === false ? '無効' : '不明'),
               },
               { name: 'GitHub Issue', value: issuesRes.html_url },
+              ...(publicIssueUrl
+                ? [{ name: '公開リポジトリ Issue', value: publicIssueUrl }]
+                : []),
               { name: 'Sentry Event ID', value: sentryEventId ?? '不明' },
             ],
           },
@@ -657,6 +1076,9 @@ ${reporterUid}
                   (autoModeEnabled === false ? '無効' : '不明'),
               },
               { name: 'GitHub Issue', value: issuesRes.html_url },
+              ...(publicIssueUrl
+                ? [{ name: '公開リポジトリ Issue', value: publicIssueUrl }]
+                : []),
             ],
           },
         ];

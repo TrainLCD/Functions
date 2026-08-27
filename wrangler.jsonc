@@ -41,7 +41,10 @@
 
   "vars": {
     "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
-    "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
+    // トリアージは日本語のタイトル・要約を生成するため、日本語生成品質が要件。
+    // 旧 @cf/meta/llama-3.1-8b-instruct-fast は日本語が破綻するうえ、
+    // Workers AI のカタログからも消えている（models list / schema に無い）。
+    "AI_TRIAGE_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     // --- TTS（/tts）---
     // Google Cloud TTS。ボイス名はロケール込みで、日英それぞれに指定する。
     // 既定は旧 Google TTS 実装（Firebase Functions 時代）と同じ組み合わせ。
@@ -110,7 +113,8 @@
       "services": [{ "binding": "STATION_API", "service": "stationapi" }],
       "vars": {
         "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
-        "AI_TRIAGE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
+        // dev と同じ理由で大型モデルを使う（日本語タイトルの破損対策）
+        "AI_TRIAGE_MODEL": "@cf/google/gemma-4-26b-a4b-it",
         // --- TTS（/tts）---
         // Google Cloud TTS。本番は dev より控えめの「やや速め」に合わせる
         "TTS_JA_VOICE_NAME": "ja-JP-Standard-B",

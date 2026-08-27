@@ -11,7 +11,7 @@ single Worker.
 - **Feedback intake** (`POST /postFeedback`): enqueues feedback onto the triage queue.
 - **Image upload** (`POST /feedback/upload-image`): stores feedback images in R2 and returns a public URL.
 - **App config delivery** (`GET /config/maintenance`, `GET /config/remote`): maintenance status and GPS thresholds (the replacement for Remote Config).
-- **Feedback triage** (queue `feedback-triage`): summarizes and classifies feedback with Workers AI, then creates a GitHub Issue and notifies Discord.
+- **Feedback triage** (queue `feedback-triage`): summarizes and classifies feedback with Workers AI, then creates a GitHub Issue and notifies Discord. When the AI confidently identifies the component at fault, it also opens a linked stub Issue in the matching public repo (see [public repo routing](#public-repo-routing)).
 - **TTS cache writes**: synthesized audio is written directly from the `/tts` handler to R2 + KV (no queue is used, because audio does not fit within the 128 KB Queues limit).
 - **Review notifications** (Cron, hourly): notifies Discord of new App Store / Google Play reviews.
 
@@ -202,6 +202,10 @@ example per line (see `fewshot.example.jsonl`):
 {"input": "user body text", "output": "{\"title\":...,\"isSpam\":false,...}"}
 ```
 
+The `output` of each example must include `component` / `componentConfidence`
+as well; the model imitates the examples, so examples without those fields make
+it omit them and public repo routing never fires.
+
 Upload (the file is stored verbatim as a single KV value):
 
 ```bash
@@ -213,6 +217,71 @@ wrangler kv key put --binding CONFIG_KV "config:fewshot" --path fewshot.jsonl --
 
 If it is not present, triage fails hard with `FEW_SHOT_NOT_AVAILABLE` (a
 fail-hard guard that prevents mis-training).
+
+## Triage safeguards
+
+Two guards keep bad triage output from degrading the backlog
+(`src/consumers/feedbackTriage.ts`):
+
+- **Gratitude is never spam.** Praise-only feedback gets `category: "praise"`
+  (`💚 Praise`, P3) instead of `💩 Spam` — there is nothing to fix, but it is
+  still a real message from a real user. Spam means content unrelated to
+  improving the app: announcement transcripts, unrelated chit-chat, ads.
+- **Spam heuristic is advisory, not authoritative.** `looksLikeSpam()` only
+  scores announcement-transcript signals when an actual announcement phrase is
+  present — "停車駅" / "方面" / station enumerations are core domain vocabulary
+  and appear in legitimate data reports. When the heuristic and the model
+  disagree and the model is confident (`confidence` ≥
+  `SPAM_OVERRIDE_MAX_CONFIDENCE`), the model wins and the Issue is tagged
+  `❓ Unknown Type` for a human check instead of being buried as spam.
+- **Broken titles never reach the backlog.** `findBrokenTitleReason()` rejects
+  titles that are missing, mojibake, foreign-script, looping, or a run of
+  particles. Those are filed with the `要約失敗` marker plus `❓ Unknown Type`,
+  and a `console.warn` records the reason so the corruption rate can be measured
+  with `wrangler tail`. A broken title is never propagated into the summary.
+
+`AI_TRIAGE_MODEL` therefore needs decent Japanese generation quality — it writes
+the Issue title and summary. Before switching it, verify three things against the
+real prompt (`wrangler dev` with the AI binding hits the live API even locally):
+
+1. **JSON schema mode is supported** — `wrangler ai models schema <model>` must
+   list `response_format` / `json_schema`.
+2. **The response shape** — some models return `response`, others only
+   `choices[0].message.content`. `pickModelResponse()` accepts both; a model
+   returning neither would fail every message.
+3. **`max_tokens` headroom** — reasoning models spend most of the budget on the
+   trace before the JSON. Watch for `finish_reason: "length"`, which truncates
+   the JSON and looks like a parse failure.
+
+Measured with the real prompt + few-shot (2026-08): `@cf/google/gemma-4-26b-a4b-it`
+completes in 5–17 s at 26–62 neurons per feedback, versus ~1 s and ~4.7 neurons
+for the old 8B model. Queue consumers use `max_batch_size: 5`, so a batch stays
+well inside the invocation limit.
+
+## Public repo routing
+
+Feedback Issues are always created in the private `TrainLCD/Issues` repo with
+the full report (original text, device info, reporter UID, stacktrace, image).
+
+On top of that, when triage identifies the component at fault
+(`component` ≠ unknown and `componentConfidence` ≥ 0.7) the worker opens a stub
+Issue in the matching public repo:
+
+| `component`   | repo                 |
+| ------------- | -------------------- |
+| `mobile_app`  | `TrainLCD/MobileApp` |
+| `station_api` | `TrainLCD/StationAPI`|
+| `functions`   | `TrainLCD/Functions` |
+| `website`     | `TrainLCD/Website`   |
+
+Because those repos are public, the stub carries **no feedback content at all** —
+no original text, no AI summary or title, no device info. It only links back to
+the private ticket (`TrainLCD/Issues#<number>` and the ticket ID), and the
+private Issue gets a comment pointing at the public one so both sides are
+traceable. Crash reports, spam, questions and failed triage are never routed.
+
+`OCTOKIT_PAT` therefore needs write access to those four repos on top of
+`TrainLCD/Issues`.
 
 ## Maintenance CLI
 

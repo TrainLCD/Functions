@@ -1,8 +1,20 @@
+import type { AIReport } from '../models/ai';
 import {
+  applySpamHeuristic,
   buildFailedReport,
+  buildPublicIssueBody,
+  buildPublicIssueTitle,
   coerceReport,
   extractReportJson,
+  findBrokenTitleReason,
+  isUnusableTitle,
   looksLikeSpam,
+  MISSING_TITLE,
+  NON_ACTIONABLE_TITLE,
+  PUBLIC_ISSUE_MIN_CONFIDENCE,
+  pickModelResponse,
+  resolvePublicIssueRepo,
+  SPAM_OVERRIDE_MAX_CONFIDENCE,
   TRIAGE_FAILED_SUMMARY,
 } from './feedbackTriage';
 
@@ -102,8 +114,14 @@ describe('coerceReport', () => {
 
   it('falls back to the default title when both title and summary are empty', () => {
     const r = coerceReport({});
-    expect(r.title).toBe('要約未取得');
-    expect(r.summary).toBe('要約未取得');
+    expect(r.title).toBe(MISSING_TITLE);
+    // タイトル未取得を要約に伝播させると両方が同時に無意味になるため、失敗を明示する
+    expect(r.summary).toBe(TRIAGE_FAILED_SUMMARY);
+  });
+
+  it('does not propagate a broken title into the summary', () => {
+    const r = coerceReport({ title: 'ををををを', summary: '' });
+    expect(r.summary).toBe(TRIAGE_FAILED_SUMMARY);
   });
 
   it('supports question and improvement synonyms', () => {
@@ -111,6 +129,14 @@ describe('coerceReport', () => {
     expect(coerceReport({ category: 'enhancement' }).category).toBe(
       'improvement'
     );
+  });
+
+  it('感謝・称賛は praise として扱う（スパムに落とさない）', () => {
+    for (const raw of ['praise', 'Thanks', ' compliment ', 'gratitude']) {
+      const r = coerceReport({ title: 't', summary: 's', category: raw });
+      expect(r.category).toBe('praise');
+      expect(r.isSpam).toBe(false);
+    }
   });
 });
 
@@ -196,5 +222,345 @@ describe('buildFailedReport', () => {
     const r = buildFailedReport('');
     expect(r.title).toBe('要約失敗: （本文なし）');
     expect(r.summary).toBe(TRIAGE_FAILED_SUMMARY);
+  });
+});
+
+describe('coerceReport（原因コンポーネント）', () => {
+  it('canonical な component と信頼度を読み取る', () => {
+    const r = coerceReport({
+      title: 't',
+      summary: 's',
+      category: 'bug',
+      component: 'station_api',
+      componentConfidence: 0.9,
+    });
+    expect(r.component).toBe('station_api');
+    expect(r.componentConfidence).toBe(0.9);
+  });
+
+  it('表記ゆれを正規化する', () => {
+    expect(coerceReport({ component: 'MobileApp' }).component).toBe(
+      'mobile_app'
+    );
+    expect(coerceReport({ component: ' iOS ' }).component).toBe('mobile_app');
+    expect(coerceReport({ component: 'Web' }).component).toBe('website');
+    expect(coerceReport({ component: 'workers' }).component).toBe('functions');
+  });
+
+  it('unknown・未知の値・欠落は null にする', () => {
+    expect(coerceReport({ component: 'unknown' }).component).toBeNull();
+    expect(coerceReport({ component: 'なにか' }).component).toBeNull();
+    expect(coerceReport({}).component).toBeNull();
+  });
+
+  it('component が特定できないときは信頼度を 0 に落とす', () => {
+    const r = coerceReport({ component: 'unknown', componentConfidence: 0.95 });
+    expect(r.component).toBeNull();
+    expect(r.componentConfidence).toBe(0);
+  });
+
+  it('component はあるが信頼度が欠落しているときは 0 とみなす', () => {
+    const r = coerceReport({ component: 'functions' });
+    expect(r.componentConfidence).toBe(0);
+  });
+});
+
+const baseReport = (overrides: Partial<AIReport> = {}): AIReport => ({
+  title: 'タイトル',
+  summary: 'サマリ',
+  isSpam: false,
+  labels: [],
+  confidence: 0.9,
+  reason: 'reason',
+  category: 'bug',
+  triageLevel: 'high',
+  component: 'mobile_app',
+  componentConfidence: 0.9,
+  ...overrides,
+});
+
+describe('resolvePublicIssueRepo', () => {
+  const opts = { reportType: 'feedback' as const, triageFailed: false };
+
+  it('原因コンポーネントに対応する公開リポジトリを返す', () => {
+    expect(resolvePublicIssueRepo(baseReport(), opts)).toBe(
+      'TrainLCD/MobileApp'
+    );
+    expect(
+      resolvePublicIssueRepo(baseReport({ component: 'station_api' }), opts)
+    ).toBe('TrainLCD/StationAPI');
+    expect(
+      resolvePublicIssueRepo(baseReport({ component: 'functions' }), opts)
+    ).toBe('TrainLCD/Functions');
+    expect(
+      resolvePublicIssueRepo(baseReport({ component: 'website' }), opts)
+    ).toBe('TrainLCD/Website');
+  });
+
+  it('改善・要望も対象にする', () => {
+    expect(
+      resolvePublicIssueRepo(baseReport({ category: 'improvement' }), opts)
+    ).toBe('TrainLCD/MobileApp');
+    expect(
+      resolvePublicIssueRepo(baseReport({ category: 'feature_request' }), opts)
+    ).toBe('TrainLCD/MobileApp');
+  });
+
+  it('原因が特定できていなければ起票しない', () => {
+    expect(
+      resolvePublicIssueRepo(
+        baseReport({ component: null, componentConfidence: 0 }),
+        opts
+      )
+    ).toBeNull();
+  });
+
+  it('信頼度が閾値未満なら起票しない', () => {
+    expect(
+      resolvePublicIssueRepo(
+        baseReport({ componentConfidence: PUBLIC_ISSUE_MIN_CONFIDENCE - 0.01 }),
+        opts
+      )
+    ).toBeNull();
+    expect(
+      resolvePublicIssueRepo(
+        baseReport({ componentConfidence: PUBLIC_ISSUE_MIN_CONFIDENCE }),
+        opts
+      )
+    ).toBe('TrainLCD/MobileApp');
+  });
+
+  it('スパム・質問・トリアージ失敗・クラッシュは起票しない', () => {
+    expect(
+      resolvePublicIssueRepo(baseReport({ isSpam: true }), opts)
+    ).toBeNull();
+    expect(
+      resolvePublicIssueRepo(baseReport({ category: 'question' }), opts)
+    ).toBeNull();
+    expect(
+      resolvePublicIssueRepo(baseReport(), { ...opts, triageFailed: true })
+    ).toBeNull();
+    expect(
+      resolvePublicIssueRepo(baseReport(), { ...opts, reportType: 'crash' })
+    ).toBeNull();
+  });
+});
+
+describe('公開リポジトリ用の Issue 本文', () => {
+  const ticketId = 'a1b2c3d4-0000-4444-8888-abcdefabcdef';
+  const body = buildPublicIssueBody({ internalIssueNumber: 123, ticketId });
+
+  it('管理 Issue 番号とチケットIDを紐づける', () => {
+    expect(buildPublicIssueTitle(123)).toContain('TrainLCD/Issues#123');
+    expect(body).toContain('TrainLCD/Issues#123');
+    expect(body).toContain(ticketId);
+  });
+
+  it('フィードバック由来の情報を一切含めない', () => {
+    const report = baseReport({
+      title: '駅名が誤って表示される',
+      summary: '山手線で駅名が1つずれて表示されるという報告',
+    });
+    const rendered = `${buildPublicIssueTitle(123)}\n${body}`;
+    expect(rendered).not.toContain(report.title);
+    expect(rendered).not.toContain(report.summary);
+    expect(rendered).not.toContain(report.reason);
+  });
+});
+
+describe('looksLikeSpam（正当な報告の誤判定）', () => {
+  // 実フィードバックは非公開のため、同等の語彙構成を持つ合成文で確認する
+  it('停車駅・方面・路線名を含むデータ不備の報告をスパムにしない', () => {
+    expect(
+      looksLikeSpam('架空線の停車駅が違います。仮駅と例駅にも停車するはずです')
+    ).toBe(false);
+    expect(looksLikeSpam('行き先方面の案内が実際と異なります')).toBe(false);
+    expect(looksLikeSpam('架空線の停車駅、仮駅・例駅が抜けています')).toBe(
+      false
+    );
+    expect(looksLikeSpam('種別が反映されていないようです')).toBe(false);
+    expect(looksLikeSpam('乗り換え路線を追加してほしいです')).toBe(false);
+    expect(looksLikeSpam('駅ナンバリングの表記がおかしいです')).toBe(false);
+  });
+
+  it('放送定型句を伴わない停車駅・方面の言及だけでは加点しない', () => {
+    // ACTIONABLE に一致しない書き方でも、放送の書き起こしでなければスパムにしない
+    expect(looksLikeSpam('架空線の停車駅と方面の情報について')).toBe(false);
+  });
+
+  it('車内放送の書き起こしは引き続きスパムとして扱う', () => {
+    expect(
+      looksLikeSpam(
+        '次は仮駅、仮駅です。お出口は左側です。ご利用ありがとうございます。'
+      )
+    ).toBe(true);
+    expect(
+      looksLikeSpam(
+        '次は仮駅方面、停車駅は例駅、見本駅です。お乗り換えのご案内'
+      )
+    ).toBe(true);
+  });
+});
+
+describe('applySpamHeuristic', () => {
+  const notSpam = (confidence: number): AIReport => ({
+    title: '停車駅の誤りについて',
+    summary: 'サマリ',
+    isSpam: false,
+    labels: ['bug'],
+    confidence,
+    reason: 'reason',
+    category: 'bug',
+    triageLevel: 'high',
+    component: 'station_api',
+    componentConfidence: 0.9,
+  });
+  const transcript =
+    '次は仮駅、仮駅です。お出口は左側です。ご利用ありがとうございます。';
+
+  it('モデルが確信を持って非スパムと判定していれば分類を維持し、人手確認に回す', () => {
+    const { report, needsSpamReview } = applySpamHeuristic(
+      notSpam(SPAM_OVERRIDE_MAX_CONFIDENCE),
+      transcript,
+      { triageFailed: false }
+    );
+    expect(needsSpamReview).toBe(true);
+    expect(report.isSpam).toBe(false);
+    expect(report.title).toBe('停車駅の誤りについて');
+    expect(report.labels).toEqual(['bug']);
+    expect(report.category).toBe('bug');
+  });
+
+  it('モデルの確信度が低い場合はヒューリスティックでスパムに倒す', () => {
+    const { report, needsSpamReview } = applySpamHeuristic(
+      notSpam(SPAM_OVERRIDE_MAX_CONFIDENCE - 0.01),
+      transcript,
+      { triageFailed: false }
+    );
+    expect(needsSpamReview).toBe(false);
+    expect(report.isSpam).toBe(true);
+    expect(report.title).toBe(NON_ACTIONABLE_TITLE);
+    expect(report.labels).toEqual([]);
+  });
+
+  it('正当な報告には何もしない', () => {
+    const input = notSpam(0.9);
+    const { report, needsSpamReview } = applySpamHeuristic(
+      input,
+      '架空線の停車駅が違います',
+      { triageFailed: false }
+    );
+    expect(needsSpamReview).toBe(false);
+    expect(report).toBe(input);
+  });
+
+  it('トリアージ失敗のレポートは上書きしない（失敗の事実を残す）', () => {
+    const failed = buildFailedReport(transcript, 72);
+    const { report, needsSpamReview } = applySpamHeuristic(failed, transcript, {
+      triageFailed: true,
+    });
+    expect(needsSpamReview).toBe(false);
+    expect(report).toBe(failed);
+    expect(report.summary).toBe(TRIAGE_FAILED_SUMMARY);
+  });
+
+  it('モデル自身がスパムと判定したものはそのまま', () => {
+    const spam = { ...notSpam(0.9), isSpam: true };
+    const { report, needsSpamReview } = applySpamHeuristic(spam, transcript, {
+      triageFailed: false,
+    });
+    expect(needsSpamReview).toBe(false);
+    expect(report).toBe(spam);
+  });
+});
+
+describe('findBrokenTitleReason', () => {
+  it('正常な日本語タイトルは通す', () => {
+    for (const title of [
+      '自動アナウンスが途中で停止する不具合',
+      '路線図のダークモード対応要望',
+      '特定駅が検索に出ず駅名表記も誤り',
+      'オートモード時に駅ナンバリングがずれる',
+      'Auto mode stops announcing station names',
+    ]) {
+      expect(findBrokenTitleReason(title)).toBeNull();
+    }
+  });
+
+  it('未取得・空・記号のみを検知する', () => {
+    expect(findBrokenTitleReason(MISSING_TITLE)).toBe('missing');
+    expect(findBrokenTitleReason('')).toBe('empty');
+    expect(findBrokenTitleReason('   ')).toBe('empty');
+    expect(findBrokenTitleReason('！！！…')).toBe('no_word_char');
+  });
+
+  it('破損した生成結果を検知する', () => {
+    expect(findBrokenTitleReason('駅名が\uFFFD示される')).toBe(
+      'replacement_char'
+    );
+    expect(findBrokenTitleReason('繧医↓縺ゅk陦ィ遉ｺ')).toBe('mojibake_kanji');
+    expect(findBrokenTitleReason('駅名ををををが変')).toBe('char_repeat');
+    expect(findBrokenTitleReason('表示表示表示がおかしい')).toBe(
+      'phrase_repeat'
+    );
+    expect(findBrokenTitleReason('駅名がにをで変わる')).toBe('particle_run');
+    expect(findBrokenTitleReason('역명이 잘못 표시됨')).toBe('foreign_script');
+  });
+
+  it('isUnusableTitle は真偽値を返す', () => {
+    expect(isUnusableTitle('正常なタイトル')).toBe(false);
+    expect(isUnusableTitle(MISSING_TITLE)).toBe(true);
+  });
+});
+
+describe('pickModelResponse', () => {
+  it('従来の Workers AI 形式（response）を取り出す', () => {
+    expect(pickModelResponse({ response: { title: 't' } })).toEqual({
+      title: 't',
+    });
+    expect(pickModelResponse({ response: '{"title":"t"}' })).toBe(
+      '{"title":"t"}'
+    );
+  });
+
+  it('OpenAI 互換形式（choices[0].message.content）を取り出す', () => {
+    // gemma-4 系は response を返さず choices のみ。ここを見落とすと全件失敗する
+    const raw = {
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: { content: '{"title":"駅名がずれる"}', reasoning: '...' },
+        },
+      ],
+      usage: { completion_tokens: 892 },
+    };
+    expect(pickModelResponse(raw)).toBe('{"title":"駅名がずれる"}');
+  });
+
+  it('response があればそちらを優先する', () => {
+    const raw = {
+      response: { title: 'A' },
+      choices: [{ message: { content: '{"title":"B"}' } }],
+    };
+    expect(pickModelResponse(raw)).toEqual({ title: 'A' });
+  });
+
+  it('取り出せない形は null', () => {
+    expect(pickModelResponse(null)).toBeNull();
+    expect(pickModelResponse('text')).toBeNull();
+    expect(pickModelResponse({})).toBeNull();
+    expect(pickModelResponse({ choices: [] })).toBeNull();
+    expect(pickModelResponse({ choices: [{ message: {} }] })).toBeNull();
+  });
+
+  it('取り出した文字列は既存の JSON 抽出でパースできる', () => {
+    const content = '{\n  "title": "駅名がずれる",\n  "isSpam": false\n}';
+    const picked = pickModelResponse({
+      choices: [{ message: { content } }],
+    }) as string;
+    expect(extractReportJson(picked)).toEqual({
+      title: '駅名がずれる',
+      isSpam: false,
+    });
   });
 });
