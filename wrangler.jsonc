@@ -29,7 +29,8 @@
   // dead_letter_queue: max_retries を使い切ったメッセージの退避先。未設定だと
   // GitHub 起票が恒久的に失敗する状況（PAT 失効など）でフィードバックが消えるため必須。
   // DLQ 側に consumer は付けない（同じ処理を回すと同じ理由で落ちるだけ）。
-  // 復旧後は `wrangler queues consumer add` などで手動で流し直す。
+  // DLQ にも保持期限があり、期限を過ぎたメッセージは消える。復旧手順と
+  // 保持期限の延ばし方は README の「Dead letter queue」節を参照。
   "queues": {
     "producers": [
       { "binding": "FEEDBACK_QUEUE", "queue": "feedback-triage-dev" }

@@ -60,6 +60,11 @@ wrangler queues create feedback-triage-dev
 wrangler queues create feedback-triage-dev-dlq   # dead letter queue (no consumer)
 ```
 
+The names above are the dev ones. Production uses the same set without the
+`-dev` suffix (`trainlcd-tts`, `trainlcd-uploads`, `feedback-triage`,
+`feedback-triage-dlq`); create those too if you are setting up prod from
+scratch. Both environments' resources already exist on the TrainLCD account.
+
 ### Setting secrets
 
 ```bash
@@ -268,16 +273,31 @@ well inside the invocation limit.
 ### Dead letter queue
 
 `processFeedbackMessage()` rethrows on failure so the consumer can `retry()`,
-but retrying does not help when the cause is permanent — an expired
-`OCTOKIT_PAT`, a revoked repo grant, a renamed repo. Without a dead letter
-queue the message is simply dropped once `max_retries: 3` is exhausted, and the
-feedback is lost for good.
+but retrying does not help when the cause is permanent — a credential that no
+longer grants access, a repo that was renamed. Without a dead letter queue the
+message is simply dropped once `max_retries: 3` is exhausted, and the feedback
+is lost for good.
 
 The consumers therefore declare `dead_letter_queue` (`feedback-triage-dlq`, and
 `feedback-triage-dev-dlq` for dev). The DLQ intentionally has **no consumer** —
-running the same handler against it would fail for the same reason. Inspect the
-backlog with `wrangler queues info feedback-triage-dlq`, fix the root cause,
-then replay by temporarily pointing a consumer at the DLQ.
+running the same handler against it would fail for the same reason.
+
+**A DLQ is not archival storage.** Messages sitting in it expire on the queue's
+retention period, which both DLQs inherit from the account default (4 days on a
+paid plan, and not extendable beyond 24 h on the free plan). That is the replay
+deadline: once it passes the feedback is gone just as surely as it was before
+this queue existed. Check and extend it if an incident may outlast it:
+
+```bash
+wrangler queues info feedback-triage-dlq
+wrangler queues update feedback-triage-dlq --message-retention-period-secs 1209600  # 14 days, the maximum
+```
+
+To recover, fix the root cause first, then replay by temporarily attaching a
+consumer to the DLQ. Give that consumer its own dead letter queue — a replay
+consumer runs the same handler, so anything still failing would hit `max_retries`
+and be deleted outright, which is the exact loss this section exists to prevent.
+Detach the temporary consumer once the backlog is drained.
 
 Note that DLQ messages carry the full feedback payload, so the DLQ is subject to
 the same handling rules as the private `TrainLCD/Issues` repo.
