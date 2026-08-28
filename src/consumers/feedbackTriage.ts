@@ -898,10 +898,13 @@ async function loadTriageMarker(
 const SAVE_MARKER_ATTEMPTS = 2;
 
 /**
- * マーカー保存を書き直すまでの待ち時間。KV は同一キーへの書き込みを 1 秒に 1 回
- * までしか受け付けないため、即座に書き直しても同じ理由で失敗する。
+ * 同一マーカーキーへの書き込みを空ける間隔。KV は同一キーへの書き込みを 1 秒に
+ * 1 回までしか受け付けず、超えると 429 になる。
  */
-const SAVE_MARKER_RETRY_DELAY_MS = 1100;
+const SAVE_MARKER_MIN_INTERVAL_MS = 1100;
+
+/** 同一キーに最後に書き込めた時刻。次の書き込みを 1 秒以上空けるために持つ。 */
+const lastMarkerWriteAt = new Map<string, number>();
 
 /**
  * 失敗したメッセージを再試行に回すまでの待ち時間。
@@ -912,33 +915,55 @@ const SAVE_MARKER_RETRY_DELAY_MS = 1100;
  */
 export const FEEDBACK_RETRY_DELAY_SECONDS = 90;
 
+/** 同一キーへの書き込み間隔が 1 秒未満にならないよう、必要なぶんだけ待つ。 */
+async function waitForMarkerWriteWindow(
+  key: string,
+  extraWaitMs = 0
+): Promise<void> {
+  const lastAt = lastMarkerWriteAt.get(key);
+  const sinceLastWrite =
+    lastAt === undefined ? Number.POSITIVE_INFINITY : Date.now() - lastAt;
+  const waitMs = Math.max(
+    SAVE_MARKER_MIN_INTERVAL_MS - sinceLastWrite,
+    extraWaitMs
+  );
+  if (waitMs <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+}
+
 /**
  * 処理済みマーカーを書く。ここで throw すると「Issue は作成済みなのに再試行される」
  * という、まさに防ぎたい状態を作ってしまうため、失敗はログに留める。
  *
  * ただし書けなかったマーカーはそのまま重複起票の窓になるので、握り潰す前に
- * 一度だけ即座に書き直す（KV の書き込み失敗は一過性のことが多い）。
+ * 一度だけ書き直す（KV の書き込み失敗は一過性のことが多い）。
+ *
+ * 1 件のレポートでは、起票直後（notified: false）と通知後（notified の実結果）の
+ * 2 回、同じキーに書く。通知が 1 秒以内に終わると KV の同一キー書き込み制限に
+ * かかるため、間隔が足りなければ待ってから書く。
  */
 async function saveTriageMarker(
   env: Env,
   reportId: string,
   marker: Omit<TriageMarker, 'version' | 'updatedAt'>
 ): Promise<void> {
-  const value: TriageMarker = {
-    version: 1,
-    ...marker,
-    updatedAt: new Date().toISOString(),
-  };
+  const key = triageMarkerKey(reportId);
   for (let attempt = 1; attempt <= SAVE_MARKER_ATTEMPTS; attempt++) {
-    if (attempt > 1) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, SAVE_MARKER_RETRY_DELAY_MS)
-      );
-    }
+    await waitForMarkerWriteWindow(
+      key,
+      attempt > 1 ? SAVE_MARKER_MIN_INTERVAL_MS : 0
+    );
+    const value: TriageMarker = {
+      version: 1,
+      ...marker,
+      updatedAt: new Date().toISOString(),
+    };
     try {
-      await env.STATE_KV.put(triageMarkerKey(reportId), JSON.stringify(value), {
+      await env.STATE_KV.put(key, JSON.stringify(value), {
         expirationTtl: TRIAGE_MARKER_TTL_SECONDS,
       });
+      lastMarkerWriteAt.set(key, Date.now());
+      pruneMarkerWriteTimes();
       return;
     } catch (err) {
       console.error('feedbackTriage: 処理済みマーカーの保存に失敗', {
@@ -948,6 +973,14 @@ async function saveTriageMarker(
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+}
+
+/** 書き込み時刻の記録が isolate に溜まり続けないよう、間隔を過ぎたものを捨てる。 */
+function pruneMarkerWriteTimes(): void {
+  const now = Date.now();
+  for (const [key, at] of lastMarkerWriteAt) {
+    if (now - at >= SAVE_MARKER_MIN_INTERVAL_MS) lastMarkerWriteAt.delete(key);
   }
 }
 

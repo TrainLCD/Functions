@@ -395,8 +395,11 @@ negative cache has expired by the time the marker is read. Changing that
 constant without understanding this is how the duplicate comes back.
 
 The same limit applies to the writes: KV accepts at most one write per second to
-a given key, so the one marker-write retry waits ~1.1 s before trying again
-rather than failing for the same reason twice.
+a given key, and one report writes that key twice — once when the Issue exists,
+once when the notification result is known. A notification that completes in
+under a second would make the second write a 429, so the consumer spaces writes
+to the same key ~1.1 s apart (and waits that long before its one write retry)
+rather than losing the notification state and re-notifying on a replay.
 
 That covers the sequential retries of one message. It does **not** serialize two
 deliveries of the same report racing each other — Cloudflare Queues is
