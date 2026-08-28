@@ -803,13 +803,216 @@ async function linkPublicIssue(
   }
 }
 
-export const processFeedbackMessage = async (
-  data: FeedbackQueueMessage,
-  env: Env
-): Promise<void> => {
-  if (!data?.report) return;
-  const { report } = data;
+// ---- 冪等化マーカー（STATE_KV） ----
 
+/**
+ * レポート 1 件の処理状態を STATE_KV に残すマーカー。
+ *
+ * GitHub Issue の作成後に例外が出ると queue が再試行し、同じフィードバックで
+ * Issue がもう 1 件作られてしまう。report.id をキーに「どこまで終わったか」を
+ * 永続化しておき、再試行では済んだ工程を飛ばす。
+ *
+ * 再試行のたびに AI を呼び直すとトリアージ結果がぶれ、起票済み Issue と通知の
+ * 内容がずれるため、トリアージ結果もマーカーに含めて再利用する。
+ */
+export type TriageMarker = {
+  version: 1;
+  /** 非公開リポジトリに作成した Issue 番号（レスポンスの解析に失敗したときは null） */
+  issueNumber: number | null;
+  /** 作成した Issue の URL（同上） */
+  issueUrl: string | null;
+  /** 公開リポジトリに作成したスタブ Issue の URL（作っていなければ null） */
+  publicIssueUrl: string | null;
+  aiReport: AIReport;
+  triageFailed: boolean;
+  needsSpamReview: boolean;
+  /** Discord 通知まで完了しているか */
+  notified: boolean;
+  updatedAt: string;
+};
+
+/**
+ * マーカーの保持期間。queue の再試行自体は数分で終わるが、DLQ に落ちたメッセージを
+ * 後日手動で流し直すことがあるため長めに取る。
+ */
+export const TRIAGE_MARKER_TTL_SECONDS = 60 * 60 * 24 * 30;
+
+/**
+ * Discord 通知だけが失敗したことを示す。queue ハンドラはこれを受けて再試行し、
+ * 再試行はマーカーを見て通知から再開する（Issue は作り直さない）。
+ */
+export class FeedbackNotifyError extends Error {
+  constructor(reportId: string) {
+    super(`Discord notification failed for report ${reportId}`);
+    this.name = 'FeedbackNotifyError';
+  }
+}
+
+/** 処理済みマーカーの KV キー。 */
+export const triageMarkerKey = (reportId: string): string =>
+  `feedbackTriage:processed:${reportId}`;
+
+/**
+ * 処理済みマーカーを読む。KV 障害は握り潰さず上位へ伝播させる（＝再試行させる）。
+ * ここで null に倒すと重複起票を防ぐという目的そのものを損なうため。
+ * まだ副作用を出していない地点なので、throw しても Issue は重複しない。
+ */
+async function loadTriageMarker(
+  env: Env,
+  reportId: string
+): Promise<TriageMarker | null> {
+  const raw = await env.STATE_KV.get(triageMarkerKey(reportId), 'text');
+  if (!raw) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.error('feedbackTriage: 処理済みマーカーが壊れているため無視する', {
+      reportId,
+    });
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const marker = parsed as Partial<TriageMarker>;
+  // aiReport を失っているマーカーは通知を組み立て直せないので無効扱いにする。
+  if (!marker.aiReport || typeof marker.aiReport !== 'object') {
+    console.error(
+      'feedbackTriage: 処理済みマーカーの内容が不正なため無視する',
+      {
+        reportId,
+      }
+    );
+    return null;
+  }
+
+  return {
+    version: 1,
+    issueNumber:
+      typeof marker.issueNumber === 'number' ? marker.issueNumber : null,
+    issueUrl: typeof marker.issueUrl === 'string' ? marker.issueUrl : null,
+    publicIssueUrl:
+      typeof marker.publicIssueUrl === 'string' ? marker.publicIssueUrl : null,
+    aiReport: marker.aiReport,
+    triageFailed: marker.triageFailed === true,
+    needsSpamReview: marker.needsSpamReview === true,
+    notified: marker.notified === true,
+    updatedAt:
+      typeof marker.updatedAt === 'string'
+        ? marker.updatedAt
+        : new Date().toISOString(),
+  };
+}
+
+/** マーカー保存の試行回数。KV の一過性エラーで冪等化の記録を落とさないため。 */
+const SAVE_MARKER_ATTEMPTS = 2;
+
+/**
+ * 同一マーカーキーへの書き込みを空ける間隔。KV は同一キーへの書き込みを 1 秒に
+ * 1 回までしか受け付けず、超えると 429 になる。
+ */
+const SAVE_MARKER_MIN_INTERVAL_MS = 1100;
+
+/** 同一キーに最後に書き込めた時刻。次の書き込みを 1 秒以上空けるために持つ。 */
+const lastMarkerWriteAt = new Map<string, number>();
+
+/**
+ * 失敗したメッセージを再試行に回すまでの待ち時間。
+ *
+ * KV はキーが無かったという結果も cacheTtl（既定 60 秒）の間エッジにキャッシュ
+ * するため、遅延なしで再試行すると、起票直後に書いたマーカーを読めずに
+ * Issue を作り直してしまう。ネガティブキャッシュが切れてから再試行させる。
+ */
+export const FEEDBACK_RETRY_DELAY_SECONDS = 90;
+
+/** 同一キーへの書き込み間隔が 1 秒未満にならないよう、必要なぶんだけ待つ。 */
+async function waitForMarkerWriteWindow(
+  key: string,
+  extraWaitMs = 0
+): Promise<void> {
+  const lastAt = lastMarkerWriteAt.get(key);
+  const sinceLastWrite =
+    lastAt === undefined ? Number.POSITIVE_INFINITY : Date.now() - lastAt;
+  const waitMs = Math.max(
+    SAVE_MARKER_MIN_INTERVAL_MS - sinceLastWrite,
+    extraWaitMs
+  );
+  if (waitMs <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+}
+
+/**
+ * 処理済みマーカーを書く。ここで throw すると「Issue は作成済みなのに再試行される」
+ * という、まさに防ぎたい状態を作ってしまうため、失敗はログに留めて false を返す。
+ * 呼び出し側は、マーカーを残せたかどうかで再試行してよいかを判断する。
+ *
+ * 書けなかったマーカーはそのまま重複起票の窓になるので、諦める前に一度だけ
+ * 書き直す（KV の書き込み失敗は一過性のことが多い）。
+ *
+ * 1 件のレポートでは、起票直後（notified: false）と通知後（notified の実結果）の
+ * 2 回、同じキーに書く。通知が 1 秒以内に終わると KV の同一キー書き込み制限に
+ * かかるため、間隔が足りなければ待ってから書く。
+ */
+async function saveTriageMarker(
+  env: Env,
+  reportId: string,
+  marker: Omit<TriageMarker, 'version' | 'updatedAt'>
+): Promise<boolean> {
+  const key = triageMarkerKey(reportId);
+  for (let attempt = 1; attempt <= SAVE_MARKER_ATTEMPTS; attempt++) {
+    await waitForMarkerWriteWindow(
+      key,
+      attempt > 1 ? SAVE_MARKER_MIN_INTERVAL_MS : 0
+    );
+    const value: TriageMarker = {
+      version: 1,
+      ...marker,
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      await env.STATE_KV.put(key, JSON.stringify(value), {
+        expirationTtl: TRIAGE_MARKER_TTL_SECONDS,
+      });
+      lastMarkerWriteAt.set(key, Date.now());
+      pruneMarkerWriteTimes();
+      return true;
+    } catch (err) {
+      console.error('feedbackTriage: 処理済みマーカーの保存に失敗', {
+        reportId,
+        attempt,
+        maxAttempts: SAVE_MARKER_ATTEMPTS,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return false;
+}
+
+/** 書き込み時刻の記録が isolate に溜まり続けないよう、間隔を過ぎたものを捨てる。 */
+function pruneMarkerWriteTimes(): void {
+  const now = Date.now();
+  for (const [key, at] of lastMarkerWriteAt) {
+    if (now - at >= SAVE_MARKER_MIN_INTERVAL_MS) lastMarkerWriteAt.delete(key);
+  }
+}
+
+// ---- トリアージ ----
+
+type TriageOutcome = {
+  aiReport: AIReport;
+  triageFailed: boolean;
+  needsSpamReview: boolean;
+};
+
+/**
+ * フィードバック本文を AI でトリアージする。生成に失敗しても throw せず、
+ * 「要約失敗」レポートに倒して原文を保全する（フィードバックを捨てないため）。
+ */
+async function triageFeedback(
+  env: Env,
+  report: Report
+): Promise<TriageOutcome> {
   const fewshot = await getFewShotText(env);
 
   // 生成 → 最初のバランスした JSON を抽出。失敗したら厳格モードで数回まで再生成する。
@@ -901,6 +1104,209 @@ export const processFeedbackMessage = async (
     );
   }
 
+  return { aiReport, triageFailed, needsSpamReview };
+}
+
+// ---- Discord 通知 ----
+
+/**
+ * Discord へ通知する。GitHub Issue の作成後に呼ばれるため、ここで throw すると
+ * queue ハンドラが再試行し、同一レポートで Issue が重複作成される。
+ * webhook URL 未設定・HTTP エラーに加え、fetch 自体の失敗（ネットワーク断・DNS
+ * 失敗・不正な URL）も含めて、あらゆる失敗をログに留めて握り潰す。
+ *
+ * 戻り値は「通知を送り終えたか」。false のときは処理済みマーカーを未通知のまま
+ * 残し、メッセージを再投入したときに通知だけやり直せるようにする。
+ */
+async function notifyDiscord(
+  env: Env,
+  params: {
+    report: Report;
+    aiReport: AIReport;
+    shouldTagTriage: boolean;
+    categoryLabel?: string;
+    triageLabel?: string;
+    autoModeLabel?: string;
+    issueUrl: string | null;
+    publicIssueUrl: string | null;
+  }
+): Promise<boolean> {
+  const {
+    report,
+    aiReport,
+    shouldTagTriage,
+    categoryLabel,
+    triageLabel,
+    autoModeLabel,
+    issueUrl,
+    publicIssueUrl,
+  } = params;
+  const {
+    id,
+    createdAt,
+    description,
+    deviceInfo,
+    language,
+    appVersion,
+    reporterUid,
+    stacktrace,
+    reportType,
+    imageUrl,
+    autoModeEnabled,
+    sentryEventId,
+  } = report;
+
+  try {
+    const csWHUrl = env.DISCORD_CS_WEBHOOK_URL;
+    const crashWHUrl = env.DISCORD_CRASH_WEBHOOK_URL;
+    const issueUrlText = issueUrl ?? '不明';
+    const embeds: DiscordEmbed[] = deviceInfo
+      ? [
+          {
+            fields: [
+              { name: 'チケットID', value: id },
+              {
+                name: '発行日時',
+                value: dayjs(createdAt).format('YYYY/MM/DD HH:mm:ss'),
+              },
+              { name: 'AIによる要約', value: aiReport.summary },
+              ...(shouldTagTriage && categoryLabel && triageLabel
+                ? [
+                    { name: 'カテゴリ', value: categoryLabel },
+                    { name: 'トリアージ', value: triageLabel },
+                  ]
+                : []),
+              {
+                name: '端末モデル名',
+                value: `${deviceInfo.brand} ${deviceInfo.modelName}(${deviceInfo.modelId})`,
+              },
+              {
+                name: '端末のOS',
+                value: `${deviceInfo.osName} ${deviceInfo.osVersion}`,
+              },
+              { name: '端末設定言語', value: deviceInfo.locale },
+              { name: 'アプリの設定言語', value: language },
+              { name: 'アプリのバージョン', value: appVersion },
+              { name: 'レポーターUID', value: reporterUid },
+              {
+                name: 'オートモード',
+                value:
+                  autoModeLabel ??
+                  (autoModeEnabled === false ? '無効' : '不明'),
+              },
+              { name: 'GitHub Issue', value: issueUrlText },
+              ...(publicIssueUrl
+                ? [{ name: '公開リポジトリ Issue', value: publicIssueUrl }]
+                : []),
+              { name: 'Sentry Event ID', value: sentryEventId ?? '不明' },
+            ],
+          },
+        ]
+      : [
+          {
+            fields: [
+              { name: 'チケットID', value: id },
+              {
+                name: '発行日時',
+                value: dayjs(createdAt).format('YYYY/MM/DD HH:mm:ss'),
+              },
+              { name: 'AIによる要約', value: aiReport.summary },
+              ...(shouldTagTriage && categoryLabel && triageLabel
+                ? [
+                    { name: 'カテゴリ', value: categoryLabel },
+                    { name: 'トリアージ', value: triageLabel },
+                  ]
+                : []),
+              { name: 'アプリの設定言語', value: language },
+              { name: 'アプリのバージョン', value: appVersion },
+              { name: 'レポーターUID', value: reporterUid },
+              {
+                name: 'オートモード',
+                value:
+                  autoModeLabel ??
+                  (autoModeEnabled === false ? '無効' : '不明'),
+              },
+              { name: 'GitHub Issue', value: issueUrlText },
+              ...(publicIssueUrl
+                ? [{ name: '公開リポジトリ Issue', value: publicIssueUrl }]
+                : []),
+            ],
+          },
+        ];
+
+    const stacktraceTooLong = (stacktrace?.split('\n').length ?? 0) > 10;
+    const content =
+      reportType === 'feedback'
+        ? `**🙏アプリから新しいフィードバックが届きまさした‼🙏**\n\`\`\`${description}\`\`\``
+        : `**😭アプリからクラッシュレポートが届きまさした‼😭**\n**${description}**\n\`\`\`${stacktrace
+            ?.split('\n')
+            .slice(0, 10)
+            .join('\n')}\n${stacktraceTooLong ? '...' : ''}\`\`\``;
+
+    switch (reportType) {
+      case 'feedback': {
+        if (!csWHUrl) {
+          console.error('DISCORD_CS_WEBHOOK_URL is not set; skipping notify');
+          return false;
+        }
+        const whRes = await fetch(csWHUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content,
+            embeds: embeds.map((emb) => ({
+              ...emb,
+              image: { url: imageUrl },
+            })),
+          }),
+        });
+        if (!whRes.ok) {
+          const msg = await whRes.text().catch(() => '');
+          console.error('Discord CS webhook failed', whRes.status, msg);
+          return false;
+        }
+        return true;
+      }
+      case 'crash': {
+        if (!crashWHUrl) {
+          console.error(
+            'DISCORD_CRASH_WEBHOOK_URL is not set; skipping notify'
+          );
+          return false;
+        }
+        const whRes = await fetch(crashWHUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content, embeds }),
+        });
+        if (!whRes.ok) {
+          const msg = await whRes.text().catch(() => '');
+          console.error('Discord Crash webhook failed', whRes.status, msg);
+          return false;
+        }
+        return true;
+      }
+      default:
+        // 通知先のない種別。送るものがないので「通知済み」として扱う。
+        return true;
+    }
+  } catch (err) {
+    // fetch 自体の失敗（ネットワークエラー等）。再送出すると Issue が重複するため握り潰す。
+    console.error('feedbackTriage: Discord 通知に失敗', {
+      reportId: id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
+export const processFeedbackMessage = async (
+  data: FeedbackQueueMessage,
+  env: Env
+): Promise<void> => {
+  if (!data?.report) return;
+  const { report } = data;
+
   const {
     id,
     createdAt,
@@ -917,6 +1323,27 @@ export const processFeedbackMessage = async (
     autoModeEnabled,
     sentryEventId,
   } = report;
+
+  // 再試行や DLQ からの再投入で同じレポートが流れてきたとき、Issue を重複起票しない
+  // ように、処理済みマーカーを見て済んだ工程を飛ばす。
+  const marker = await loadTriageMarker(env, id);
+  if (marker?.notified) {
+    console.warn(
+      'feedbackTriage: 処理済みのレポートを再受信したためスキップする',
+      { reportId: id, issueNumber: marker.issueNumber }
+    );
+    return;
+  }
+
+  // 起票済みなら AI を呼び直さない。呼び直すと結果がぶれ、起票済み Issue と
+  // Discord 通知の内容がずれるため、マーカーに残したトリアージ結果を使う。
+  const { aiReport, triageFailed, needsSpamReview } = marker
+    ? {
+        aiReport: marker.aiReport,
+        triageFailed: marker.triageFailed,
+        needsSpamReview: marker.needsSpamReview,
+      }
+    : await triageFeedback(env, report);
 
   const createdAtText = dayjs(createdAt).format('YYYY/MM/DD HH:mm:ss');
   const osNameLabel = (() => {
@@ -940,10 +1367,15 @@ export const processFeedbackMessage = async (
     ? TRIAGE_LABELS[aiReport.triageLevel]
     : undefined;
 
-  try {
-    const res = await githubPost(env, `${INTERNAL_REPO}/issues`, {
-      title: aiReport.title ?? '要約未取得',
-      body: `
+  let issueNumber = marker?.issueNumber ?? null;
+  let issueUrl = marker?.issueUrl ?? null;
+  let publicIssueUrl = marker?.publicIssueUrl ?? null;
+
+  if (!marker) {
+    try {
+      const res = await githubPost(env, `${INTERNAL_REPO}/issues`, {
+        title: aiReport.title ?? '要約未取得',
+        body: `
 ![Image](${imageUrl})
 
 
@@ -989,34 +1421,48 @@ ${sentryEventId}
 ## レポーターUID
 ${reporterUid}
         `.trim(),
-      assignees: ['TinyKitten'],
-      milestone: null,
-      labels: [
-        reportType === 'feedback' &&
-          !aiReport.isSpam &&
-          GITHUB_LABELS.FEEDBACK_TYPE,
-        reportType === 'crash' && GITHUB_LABELS.CRASH_TYPE,
-        appEdition === 'production' && GITHUB_LABELS.PRODUCTION_APP,
-        appEdition === 'canary' && GITHUB_LABELS.CANARY_APP,
-        appClip && GITHUB_LABELS.PLATFORM_APPCLIP,
-        aiReport.isSpam && GITHUB_LABELS.SPAM_TYPE,
-        (triageFailed || needsSpamReview) && GITHUB_LABELS.UNKNOWN_TYPE,
-        osNameLabel,
-        autoModeLabel,
-        categoryLabel,
-        triageLabel,
-      ].filter(Boolean),
-    });
+        assignees: ['TinyKitten'],
+        milestone: null,
+        labels: [
+          reportType === 'feedback' &&
+            !aiReport.isSpam &&
+            GITHUB_LABELS.FEEDBACK_TYPE,
+          reportType === 'crash' && GITHUB_LABELS.CRASH_TYPE,
+          appEdition === 'production' && GITHUB_LABELS.PRODUCTION_APP,
+          appEdition === 'canary' && GITHUB_LABELS.CANARY_APP,
+          appClip && GITHUB_LABELS.PLATFORM_APPCLIP,
+          aiReport.isSpam && GITHUB_LABELS.SPAM_TYPE,
+          (triageFailed || needsSpamReview) && GITHUB_LABELS.UNKNOWN_TYPE,
+          osNameLabel,
+          autoModeLabel,
+          categoryLabel,
+          triageLabel,
+        ].filter(Boolean),
+      });
 
-    if (res.status !== 201) {
-      console.error(await res.json());
-      throw new Error(`GitHub API failed with status ${res.status}`);
+      if (res.status !== 201) {
+        console.error(await res.text().catch(() => ''));
+        throw new Error(`GitHub API failed with status ${res.status}`);
+      }
+
+      // ここから先は Issue 作成済み。throw して再試行させると重複起票になるため、
+      // レスポンスの解析に失敗しても続行し、分かった範囲をマーカーに残す。
+      const created = (await res.json().catch((err: unknown) => {
+        console.error('feedbackTriage: 起票レスポンスの解析に失敗', {
+          reportId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      })) as { html_url?: string; number?: number } | null;
+      issueNumber = typeof created?.number === 'number' ? created.number : null;
+      issueUrl =
+        typeof created?.html_url === 'string' ? created.html_url : null;
+    } catch (err) {
+      // Issue 作成前の失敗。握りつぶすと queue ハンドラが ack してメッセージを失うため、
+      // 再送出して再試行させる（この時点では Issue は作られていないので重複しない）。
+      console.error(err);
+      throw err;
     }
-
-    const issuesRes = (await res.json()) as {
-      html_url: string;
-      number: number;
-    };
 
     // 原因コンポーネントが特定できている場合のみ、該当の公開リポジトリにも起票する。
     // 公開側に載せるのは管理 Issue 番号とチケットIDだけで、フィードバックの内容は含めない。
@@ -1026,153 +1472,66 @@ ${reporterUid}
       triageFailed,
       needsSpamReview,
     });
-    let publicIssueUrl: string | null = null;
-    if (publicRepo) {
+    if (publicRepo && issueNumber !== null) {
       publicIssueUrl = await createPublicIssue(env, {
         repo: publicRepo,
-        internalIssueNumber: issuesRes.number,
+        internalIssueNumber: issueNumber,
         ticketId: id,
       });
       if (publicIssueUrl) {
-        await linkPublicIssue(env, issuesRes.number, publicIssueUrl);
+        await linkPublicIssue(env, issueNumber, publicIssueUrl);
       }
     }
 
-    const csWHUrl = env.DISCORD_CS_WEBHOOK_URL;
-    const crashWHUrl = env.DISCORD_CRASH_WEBHOOK_URL;
-    const embeds: DiscordEmbed[] = deviceInfo
-      ? [
-          {
-            fields: [
-              { name: 'チケットID', value: id },
-              {
-                name: '発行日時',
-                value: dayjs(createdAt).format('YYYY/MM/DD HH:mm:ss'),
-              },
-              { name: 'AIによる要約', value: aiReport.summary },
-              ...(shouldTagTriage && categoryLabel && triageLabel
-                ? [
-                    { name: 'カテゴリ', value: categoryLabel },
-                    { name: 'トリアージ', value: triageLabel },
-                  ]
-                : []),
-              {
-                name: '端末モデル名',
-                value: `${deviceInfo.brand} ${deviceInfo.modelName}(${deviceInfo.modelId})`,
-              },
-              {
-                name: '端末のOS',
-                value: `${deviceInfo.osName} ${deviceInfo.osVersion}`,
-              },
-              { name: '端末設定言語', value: deviceInfo.locale },
-              { name: 'アプリの設定言語', value: language },
-              { name: 'アプリのバージョン', value: appVersion },
-              { name: 'レポーターUID', value: reporterUid },
-              {
-                name: 'オートモード',
-                value:
-                  autoModeLabel ??
-                  (autoModeEnabled === false ? '無効' : '不明'),
-              },
-              { name: 'GitHub Issue', value: issuesRes.html_url },
-              ...(publicIssueUrl
-                ? [{ name: '公開リポジトリ Issue', value: publicIssueUrl }]
-                : []),
-              { name: 'Sentry Event ID', value: sentryEventId ?? '不明' },
-            ],
-          },
-        ]
-      : [
-          {
-            fields: [
-              { name: 'チケットID', value: id },
-              {
-                name: '発行日時',
-                value: dayjs(createdAt).format('YYYY/MM/DD HH:mm:ss'),
-              },
-              { name: 'AIによる要約', value: aiReport.summary },
-              ...(shouldTagTriage && categoryLabel && triageLabel
-                ? [
-                    { name: 'カテゴリ', value: categoryLabel },
-                    { name: 'トリアージ', value: triageLabel },
-                  ]
-                : []),
-              { name: 'アプリの設定言語', value: language },
-              { name: 'アプリのバージョン', value: appVersion },
-              { name: 'レポーターUID', value: reporterUid },
-              {
-                name: 'オートモード',
-                value:
-                  autoModeLabel ??
-                  (autoModeEnabled === false ? '無効' : '不明'),
-              },
-              { name: 'GitHub Issue', value: issuesRes.html_url },
-              ...(publicIssueUrl
-                ? [{ name: '公開リポジトリ Issue', value: publicIssueUrl }]
-                : []),
-            ],
-          },
-        ];
-
-    const stacktraceTooLong = (stacktrace?.split('\n').length ?? 0) > 10;
-    const content =
-      reportType === 'feedback'
-        ? `**🙏アプリから新しいフィードバックが届きまさした‼🙏**\n\`\`\`${description}\`\`\``
-        : `**😭アプリからクラッシュレポートが届きまさした‼😭**\n**${description}**\n\`\`\`${stacktrace
-            ?.split('\n')
-            .slice(0, 10)
-            .join('\n')}\n${stacktraceTooLong ? '...' : ''}\`\`\``;
-
-    // 注意: ここから先（GitHub Issue 作成後）の Discord 通知は失敗しても throw しない。
-    // throw すると queue ハンドラが retry し、同一レポートで Issue が重複作成されるため、
-    // 通知の失敗・URL 未設定はログに留める。
-    switch (reportType) {
-      case 'feedback': {
-        if (!csWHUrl) {
-          console.error('DISCORD_CS_WEBHOOK_URL is not set; skipping notify');
-          break;
-        }
-        const whRes = await fetch(csWHUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content,
-            embeds: embeds.map((emb) => ({
-              ...emb,
-              image: { url: imageUrl },
-            })),
-          }),
-        });
-        if (!whRes.ok) {
-          const msg = await whRes.text().catch(() => '');
-          console.error('Discord CS webhook failed', whRes.status, msg);
-        }
-        break;
-      }
-      case 'crash': {
-        if (!crashWHUrl) {
-          console.error(
-            'DISCORD_CRASH_WEBHOOK_URL is not set; skipping notify'
-          );
-          break;
-        }
-        const whRes = await fetch(crashWHUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content, embeds }),
-        });
-        if (!whRes.ok) {
-          const msg = await whRes.text().catch(() => '');
-          console.error('Discord Crash webhook failed', whRes.status, msg);
-        }
-        break;
-      }
-      default:
-        break;
-    }
-  } catch (err) {
-    // 握りつぶすと queue ハンドラが ack してメッセージを失うため、再送出して再試行させる
-    console.error(err);
-    throw err;
+    // 起票済みであることを先に永続化する。この後で落ちても、再試行は通知から再開する。
+    await saveTriageMarker(env, id, {
+      issueNumber,
+      issueUrl,
+      publicIssueUrl,
+      aiReport,
+      triageFailed,
+      needsSpamReview,
+      notified: false,
+    });
   }
+
+  const notified = await notifyDiscord(env, {
+    report,
+    aiReport,
+    shouldTagTriage,
+    categoryLabel,
+    triageLabel,
+    autoModeLabel,
+    issueUrl,
+    publicIssueUrl,
+  });
+
+  const markerSaved = await saveTriageMarker(env, id, {
+    issueNumber,
+    issueUrl,
+    publicIssueUrl,
+    aiReport,
+    triageFailed,
+    needsSpamReview,
+    // 通知に失敗したときは未通知のまま残す。再試行では起票を飛ばして通知だけ
+    // やり直す（成功したことにすると通知が永久に届かない）。
+    notified,
+  });
+
+  if (notified) return;
+
+  if (!markerSaved) {
+    // マーカーを残せなかったので、再試行すると Issue を作り直してしまう。
+    // 通知を諦めて ack する（フィードバック自体は起票済みで失われない）。
+    console.error(
+      'feedbackTriage: 通知に失敗したがマーカーも残せなかったため再試行しない',
+      { reportId: id, issueNumber }
+    );
+    return;
+  }
+
+  // 起票済みなので、再試行してもマーカーを見て通知から再開する（重複起票しない）。
+  // max_retries を使い切ったメッセージは DLQ に残り、Discord 側の障害・設定ミスに
+  // 気づける。
+  throw new FeedbackNotifyError(id);
 };
