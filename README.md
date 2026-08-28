@@ -353,6 +353,40 @@ it once you have dealt with whatever landed there.
 Note that DLQ messages carry the full feedback payload, so the DLQ is subject to
 the same handling rules as the private `TrainLCD/Issues` repo.
 
+### Retry idempotency
+
+A retry re-runs `processFeedbackMessage()` from the top, so anything that throws
+*after* the Issue has been created files the same feedback again — up to four
+Issues with `max_retries: 3`, plus one more for every DLQ replay.
+
+To prevent that, the consumer keeps a per-report marker in `STATE_KV` under
+`feedbackTriage:processed:<report.id>` (30-day TTL, long enough to cover a DLQ
+replay). It records the created Issue number and URL, the public stub URL, the
+triage result, and whether the Discord notification went out. The marker decides
+what each delivery still has to do:
+
+- **notified** — nothing. The message is acked and dropped.
+- **Issue created, not notified** — skip triage and Issue creation, re-send the
+  Discord notification only. The stored triage result is reused instead of being
+  re-inferred, so the notification matches the Issue that was already filed, and
+  the retry costs no Workers AI neurons.
+- **no marker** — the full path, writing the marker as soon as the Issue exists.
+
+Everything after Issue creation is written so that it cannot throw: Discord
+failures (including `fetch()` itself rejecting on a network or DNS error, which
+is what made this reachable in practice), a malformed Issue-creation response,
+and marker writes are all logged and swallowed. The only rethrow left is a
+failure *before* the Issue exists, which is exactly where a retry helps.
+
+KV is eventually consistent, so this is not a strict lock. Sequential retries of
+one message are seconds apart at minimum, well past KV's convergence window.
+
+One gap stays open by design: if the Issue-creation `fetch()` fails *after*
+GitHub has already created the Issue, no marker was written and the retry files
+a second one. Closing that would mean searching `TrainLCD/Issues` by ticket ID
+before every creation, which costs a request per feedback for a case that needs
+GitHub to drop the response of a request it accepted.
+
 ## Public repo routing
 
 Feedback Issues are always created in the private `TrainLCD/Issues` repo with

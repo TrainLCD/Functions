@@ -803,13 +803,139 @@ async function linkPublicIssue(
   }
 }
 
-export const processFeedbackMessage = async (
-  data: FeedbackQueueMessage,
-  env: Env
-): Promise<void> => {
-  if (!data?.report) return;
-  const { report } = data;
+// ---- 冪等化マーカー（STATE_KV） ----
 
+/**
+ * レポート 1 件の処理状態を STATE_KV に残すマーカー。
+ *
+ * GitHub Issue の作成後に例外が出ると queue が再試行し、同じフィードバックで
+ * Issue がもう 1 件作られてしまう。report.id をキーに「どこまで終わったか」を
+ * 永続化しておき、再試行では済んだ工程を飛ばす。
+ *
+ * 再試行のたびに AI を呼び直すとトリアージ結果がぶれ、起票済み Issue と通知の
+ * 内容がずれるため、トリアージ結果もマーカーに含めて再利用する。
+ */
+export type TriageMarker = {
+  version: 1;
+  /** 非公開リポジトリに作成した Issue 番号（レスポンスの解析に失敗したときは null） */
+  issueNumber: number | null;
+  /** 作成した Issue の URL（同上） */
+  issueUrl: string | null;
+  /** 公開リポジトリに作成したスタブ Issue の URL（作っていなければ null） */
+  publicIssueUrl: string | null;
+  aiReport: AIReport;
+  triageFailed: boolean;
+  needsSpamReview: boolean;
+  /** Discord 通知まで完了しているか */
+  notified: boolean;
+  updatedAt: string;
+};
+
+/**
+ * マーカーの保持期間。queue の再試行自体は数分で終わるが、DLQ に落ちたメッセージを
+ * 後日手動で流し直すことがあるため長めに取る。
+ */
+export const TRIAGE_MARKER_TTL_SECONDS = 60 * 60 * 24 * 30;
+
+/** 処理済みマーカーの KV キー。 */
+export const triageMarkerKey = (reportId: string): string =>
+  `feedbackTriage:processed:${reportId}`;
+
+/**
+ * 処理済みマーカーを読む。KV 障害は握り潰さず上位へ伝播させる（＝再試行させる）。
+ * ここで null に倒すと重複起票を防ぐという目的そのものを損なうため。
+ * まだ副作用を出していない地点なので、throw しても Issue は重複しない。
+ */
+async function loadTriageMarker(
+  env: Env,
+  reportId: string
+): Promise<TriageMarker | null> {
+  const raw = await env.STATE_KV.get(triageMarkerKey(reportId), 'text');
+  if (!raw) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.error('feedbackTriage: 処理済みマーカーが壊れているため無視する', {
+      reportId,
+    });
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const marker = parsed as Partial<TriageMarker>;
+  // aiReport を失っているマーカーは通知を組み立て直せないので無効扱いにする。
+  if (!marker.aiReport || typeof marker.aiReport !== 'object') {
+    console.error(
+      'feedbackTriage: 処理済みマーカーの内容が不正なため無視する',
+      {
+        reportId,
+      }
+    );
+    return null;
+  }
+
+  return {
+    version: 1,
+    issueNumber:
+      typeof marker.issueNumber === 'number' ? marker.issueNumber : null,
+    issueUrl: typeof marker.issueUrl === 'string' ? marker.issueUrl : null,
+    publicIssueUrl:
+      typeof marker.publicIssueUrl === 'string' ? marker.publicIssueUrl : null,
+    aiReport: marker.aiReport,
+    triageFailed: marker.triageFailed === true,
+    needsSpamReview: marker.needsSpamReview === true,
+    notified: marker.notified === true,
+    updatedAt:
+      typeof marker.updatedAt === 'string'
+        ? marker.updatedAt
+        : new Date().toISOString(),
+  };
+}
+
+/**
+ * 処理済みマーカーを書く。ここで throw すると「Issue は作成済みなのに再試行される」
+ * という、まさに防ぎたい状態を作ってしまうため、失敗はログに留める。
+ */
+async function saveTriageMarker(
+  env: Env,
+  reportId: string,
+  marker: Omit<TriageMarker, 'version' | 'updatedAt'>
+): Promise<void> {
+  const value: TriageMarker = {
+    version: 1,
+    ...marker,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    await env.STATE_KV.put(triageMarkerKey(reportId), JSON.stringify(value), {
+      expirationTtl: TRIAGE_MARKER_TTL_SECONDS,
+    });
+  } catch (err) {
+    console.error('feedbackTriage: 処理済みマーカーの保存に失敗', {
+      reportId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ---- トリアージ ----
+
+type TriageOutcome = {
+  aiReport: AIReport;
+  triageFailed: boolean;
+  needsSpamReview: boolean;
+};
+
+/**
+ * フィードバック本文を AI でトリアージする。生成に失敗しても throw せず、
+ * 「要約失敗」レポートに倒して原文を保全する（フィードバックを捨てないため）。
+ */
+async function triageFeedback(
+  env: Env,
+  report: Report
+): Promise<TriageOutcome> {
   const fewshot = await getFewShotText(env);
 
   // 生成 → 最初のバランスした JSON を抽出。失敗したら厳格モードで数回まで再生成する。
@@ -901,6 +1027,40 @@ export const processFeedbackMessage = async (
     );
   }
 
+  return { aiReport, triageFailed, needsSpamReview };
+}
+
+// ---- Discord 通知 ----
+
+/**
+ * Discord へ通知する。GitHub Issue の作成後に呼ばれるため、ここで throw すると
+ * queue ハンドラが再試行し、同一レポートで Issue が重複作成される。
+ * webhook URL 未設定・HTTP エラーに加え、fetch 自体の失敗（ネットワーク断・DNS
+ * 失敗・不正な URL）も含めて、あらゆる失敗をログに留めて握り潰す。
+ */
+async function notifyDiscord(
+  env: Env,
+  params: {
+    report: Report;
+    aiReport: AIReport;
+    shouldTagTriage: boolean;
+    categoryLabel?: string;
+    triageLabel?: string;
+    autoModeLabel?: string;
+    issueUrl: string | null;
+    publicIssueUrl: string | null;
+  }
+): Promise<void> {
+  const {
+    report,
+    aiReport,
+    shouldTagTriage,
+    categoryLabel,
+    triageLabel,
+    autoModeLabel,
+    issueUrl,
+    publicIssueUrl,
+  } = params;
   const {
     id,
     createdAt,
@@ -912,134 +1072,14 @@ export const processFeedbackMessage = async (
     stacktrace,
     reportType,
     imageUrl,
-    appEdition,
-    appClip,
     autoModeEnabled,
     sentryEventId,
   } = report;
 
-  const createdAtText = dayjs(createdAt).format('YYYY/MM/DD HH:mm:ss');
-  const osNameLabel = (() => {
-    if (deviceInfo?.osName === 'iOS') return GITHUB_LABELS.PLATFORM_IOS;
-    if (deviceInfo?.osName === 'iPadOS') return GITHUB_LABELS.PLATFORM_IPADOS;
-    if (deviceInfo?.osName === 'Android') return GITHUB_LABELS.PLATFORM_ANDROID;
-    return GITHUB_LABELS.PLATFORM_OTHER_OS;
-  })();
-
-  const autoModeLabel = autoModeEnabled
-    ? GITHUB_LABELS.AUTOMODE_ENABLED
-    : undefined;
-
-  // トリアージ生成に失敗したときは誤ったカテゴリ/優先度を付けない。
-  const shouldTagTriage =
-    reportType === 'feedback' && !aiReport.isSpam && !triageFailed;
-  const categoryLabel = shouldTagTriage
-    ? CATEGORY_LABELS[aiReport.category]
-    : undefined;
-  const triageLabel = shouldTagTriage
-    ? TRIAGE_LABELS[aiReport.triageLevel]
-    : undefined;
-
   try {
-    const res = await githubPost(env, `${INTERNAL_REPO}/issues`, {
-      title: aiReport.title ?? '要約未取得',
-      body: `
-![Image](${imageUrl})
-
-
-${'```'}
-${description}
-${'```'}
-
-## AIによる要約
-${aiReport.summary}
-
-## チケットID
-${id}
-
-## 発行日時
-${createdAtText}
-
-## 端末モデル名
-${deviceInfo?.brand} ${deviceInfo?.modelName}(${deviceInfo?.modelId})
-
-## 端末のOS
-${deviceInfo?.osName} ${deviceInfo?.osVersion}
-
-## 端末設定言語
-${deviceInfo?.locale}
-
-## アプリの設定言語
-${language}
-
-## アプリのバージョン
-${appVersion}
-
-## オートモード
-${autoModeEnabled ? '有効' : '無効'}
-
-## スタックトレース
-${'```'}
-${stacktrace}
-${'```'}
-
-## Sentry Event ID
-${sentryEventId}
-
-## レポーターUID
-${reporterUid}
-        `.trim(),
-      assignees: ['TinyKitten'],
-      milestone: null,
-      labels: [
-        reportType === 'feedback' &&
-          !aiReport.isSpam &&
-          GITHUB_LABELS.FEEDBACK_TYPE,
-        reportType === 'crash' && GITHUB_LABELS.CRASH_TYPE,
-        appEdition === 'production' && GITHUB_LABELS.PRODUCTION_APP,
-        appEdition === 'canary' && GITHUB_LABELS.CANARY_APP,
-        appClip && GITHUB_LABELS.PLATFORM_APPCLIP,
-        aiReport.isSpam && GITHUB_LABELS.SPAM_TYPE,
-        (triageFailed || needsSpamReview) && GITHUB_LABELS.UNKNOWN_TYPE,
-        osNameLabel,
-        autoModeLabel,
-        categoryLabel,
-        triageLabel,
-      ].filter(Boolean),
-    });
-
-    if (res.status !== 201) {
-      console.error(await res.json());
-      throw new Error(`GitHub API failed with status ${res.status}`);
-    }
-
-    const issuesRes = (await res.json()) as {
-      html_url: string;
-      number: number;
-    };
-
-    // 原因コンポーネントが特定できている場合のみ、該当の公開リポジトリにも起票する。
-    // 公開側に載せるのは管理 Issue 番号とチケットIDだけで、フィードバックの内容は含めない。
-    // 起票後は管理 Issue 側にもコメントでリンクを残し、双方向に追えるようにする。
-    const publicRepo = resolvePublicIssueRepo(aiReport, {
-      reportType,
-      triageFailed,
-      needsSpamReview,
-    });
-    let publicIssueUrl: string | null = null;
-    if (publicRepo) {
-      publicIssueUrl = await createPublicIssue(env, {
-        repo: publicRepo,
-        internalIssueNumber: issuesRes.number,
-        ticketId: id,
-      });
-      if (publicIssueUrl) {
-        await linkPublicIssue(env, issuesRes.number, publicIssueUrl);
-      }
-    }
-
     const csWHUrl = env.DISCORD_CS_WEBHOOK_URL;
     const crashWHUrl = env.DISCORD_CRASH_WEBHOOK_URL;
+    const issueUrlText = issueUrl ?? '不明';
     const embeds: DiscordEmbed[] = deviceInfo
       ? [
           {
@@ -1074,7 +1114,7 @@ ${reporterUid}
                   autoModeLabel ??
                   (autoModeEnabled === false ? '無効' : '不明'),
               },
-              { name: 'GitHub Issue', value: issuesRes.html_url },
+              { name: 'GitHub Issue', value: issueUrlText },
               ...(publicIssueUrl
                 ? [{ name: '公開リポジトリ Issue', value: publicIssueUrl }]
                 : []),
@@ -1106,7 +1146,7 @@ ${reporterUid}
                   autoModeLabel ??
                   (autoModeEnabled === false ? '無効' : '不明'),
               },
-              { name: 'GitHub Issue', value: issuesRes.html_url },
+              { name: 'GitHub Issue', value: issueUrlText },
               ...(publicIssueUrl
                 ? [{ name: '公開リポジトリ Issue', value: publicIssueUrl }]
                 : []),
@@ -1123,9 +1163,6 @@ ${reporterUid}
             .slice(0, 10)
             .join('\n')}\n${stacktraceTooLong ? '...' : ''}\`\`\``;
 
-    // 注意: ここから先（GitHub Issue 作成後）の Discord 通知は失敗しても throw しない。
-    // throw すると queue ハンドラが retry し、同一レポートで Issue が重複作成されるため、
-    // 通知の失敗・URL 未設定はログに留める。
     switch (reportType) {
       case 'feedback': {
         if (!csWHUrl) {
@@ -1171,8 +1208,227 @@ ${reporterUid}
         break;
     }
   } catch (err) {
-    // 握りつぶすと queue ハンドラが ack してメッセージを失うため、再送出して再試行させる
-    console.error(err);
-    throw err;
+    // fetch 自体の失敗（ネットワークエラー等）。再送出すると Issue が重複するため握り潰す。
+    console.error('feedbackTriage: Discord 通知に失敗', {
+      reportId: id,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
+}
+
+export const processFeedbackMessage = async (
+  data: FeedbackQueueMessage,
+  env: Env
+): Promise<void> => {
+  if (!data?.report) return;
+  const { report } = data;
+
+  const {
+    id,
+    createdAt,
+    description,
+    deviceInfo,
+    language,
+    appVersion,
+    reporterUid,
+    stacktrace,
+    reportType,
+    imageUrl,
+    appEdition,
+    appClip,
+    autoModeEnabled,
+    sentryEventId,
+  } = report;
+
+  // 再試行や DLQ からの再投入で同じレポートが流れてきたとき、Issue を重複起票しない
+  // ように、処理済みマーカーを見て済んだ工程を飛ばす。
+  const marker = await loadTriageMarker(env, id);
+  if (marker?.notified) {
+    console.warn(
+      'feedbackTriage: 処理済みのレポートを再受信したためスキップする',
+      { reportId: id, issueNumber: marker.issueNumber }
+    );
+    return;
+  }
+
+  // 起票済みなら AI を呼び直さない。呼び直すと結果がぶれ、起票済み Issue と
+  // Discord 通知の内容がずれるため、マーカーに残したトリアージ結果を使う。
+  const { aiReport, triageFailed, needsSpamReview } = marker
+    ? {
+        aiReport: marker.aiReport,
+        triageFailed: marker.triageFailed,
+        needsSpamReview: marker.needsSpamReview,
+      }
+    : await triageFeedback(env, report);
+
+  const createdAtText = dayjs(createdAt).format('YYYY/MM/DD HH:mm:ss');
+  const osNameLabel = (() => {
+    if (deviceInfo?.osName === 'iOS') return GITHUB_LABELS.PLATFORM_IOS;
+    if (deviceInfo?.osName === 'iPadOS') return GITHUB_LABELS.PLATFORM_IPADOS;
+    if (deviceInfo?.osName === 'Android') return GITHUB_LABELS.PLATFORM_ANDROID;
+    return GITHUB_LABELS.PLATFORM_OTHER_OS;
+  })();
+
+  const autoModeLabel = autoModeEnabled
+    ? GITHUB_LABELS.AUTOMODE_ENABLED
+    : undefined;
+
+  // トリアージ生成に失敗したときは誤ったカテゴリ/優先度を付けない。
+  const shouldTagTriage =
+    reportType === 'feedback' && !aiReport.isSpam && !triageFailed;
+  const categoryLabel = shouldTagTriage
+    ? CATEGORY_LABELS[aiReport.category]
+    : undefined;
+  const triageLabel = shouldTagTriage
+    ? TRIAGE_LABELS[aiReport.triageLevel]
+    : undefined;
+
+  let issueNumber = marker?.issueNumber ?? null;
+  let issueUrl = marker?.issueUrl ?? null;
+  let publicIssueUrl = marker?.publicIssueUrl ?? null;
+
+  if (!marker) {
+    try {
+      const res = await githubPost(env, `${INTERNAL_REPO}/issues`, {
+        title: aiReport.title ?? '要約未取得',
+        body: `
+![Image](${imageUrl})
+
+
+${'```'}
+${description}
+${'```'}
+
+## AIによる要約
+${aiReport.summary}
+
+## チケットID
+${id}
+
+## 発行日時
+${createdAtText}
+
+## 端末モデル名
+${deviceInfo?.brand} ${deviceInfo?.modelName}(${deviceInfo?.modelId})
+
+## 端末のOS
+${deviceInfo?.osName} ${deviceInfo?.osVersion}
+
+## 端末設定言語
+${deviceInfo?.locale}
+
+## アプリの設定言語
+${language}
+
+## アプリのバージョン
+${appVersion}
+
+## オートモード
+${autoModeEnabled ? '有効' : '無効'}
+
+## スタックトレース
+${'```'}
+${stacktrace}
+${'```'}
+
+## Sentry Event ID
+${sentryEventId}
+
+## レポーターUID
+${reporterUid}
+        `.trim(),
+        assignees: ['TinyKitten'],
+        milestone: null,
+        labels: [
+          reportType === 'feedback' &&
+            !aiReport.isSpam &&
+            GITHUB_LABELS.FEEDBACK_TYPE,
+          reportType === 'crash' && GITHUB_LABELS.CRASH_TYPE,
+          appEdition === 'production' && GITHUB_LABELS.PRODUCTION_APP,
+          appEdition === 'canary' && GITHUB_LABELS.CANARY_APP,
+          appClip && GITHUB_LABELS.PLATFORM_APPCLIP,
+          aiReport.isSpam && GITHUB_LABELS.SPAM_TYPE,
+          (triageFailed || needsSpamReview) && GITHUB_LABELS.UNKNOWN_TYPE,
+          osNameLabel,
+          autoModeLabel,
+          categoryLabel,
+          triageLabel,
+        ].filter(Boolean),
+      });
+
+      if (res.status !== 201) {
+        console.error(await res.text().catch(() => ''));
+        throw new Error(`GitHub API failed with status ${res.status}`);
+      }
+
+      // ここから先は Issue 作成済み。throw して再試行させると重複起票になるため、
+      // レスポンスの解析に失敗しても続行し、分かった範囲をマーカーに残す。
+      const created = (await res.json().catch((err: unknown) => {
+        console.error('feedbackTriage: 起票レスポンスの解析に失敗', {
+          reportId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      })) as { html_url?: string; number?: number } | null;
+      issueNumber = typeof created?.number === 'number' ? created.number : null;
+      issueUrl =
+        typeof created?.html_url === 'string' ? created.html_url : null;
+    } catch (err) {
+      // Issue 作成前の失敗。握りつぶすと queue ハンドラが ack してメッセージを失うため、
+      // 再送出して再試行させる（この時点では Issue は作られていないので重複しない）。
+      console.error(err);
+      throw err;
+    }
+
+    // 原因コンポーネントが特定できている場合のみ、該当の公開リポジトリにも起票する。
+    // 公開側に載せるのは管理 Issue 番号とチケットIDだけで、フィードバックの内容は含めない。
+    // 起票後は管理 Issue 側にもコメントでリンクを残し、双方向に追えるようにする。
+    const publicRepo = resolvePublicIssueRepo(aiReport, {
+      reportType,
+      triageFailed,
+      needsSpamReview,
+    });
+    if (publicRepo && issueNumber !== null) {
+      publicIssueUrl = await createPublicIssue(env, {
+        repo: publicRepo,
+        internalIssueNumber: issueNumber,
+        ticketId: id,
+      });
+      if (publicIssueUrl) {
+        await linkPublicIssue(env, issueNumber, publicIssueUrl);
+      }
+    }
+
+    // 起票済みであることを先に永続化する。この後で落ちても、再試行は通知から再開する。
+    await saveTriageMarker(env, id, {
+      issueNumber,
+      issueUrl,
+      publicIssueUrl,
+      aiReport,
+      triageFailed,
+      needsSpamReview,
+      notified: false,
+    });
+  }
+
+  await notifyDiscord(env, {
+    report,
+    aiReport,
+    shouldTagTriage,
+    categoryLabel,
+    triageLabel,
+    autoModeLabel,
+    issueUrl,
+    publicIssueUrl,
+  });
+
+  await saveTriageMarker(env, id, {
+    issueNumber,
+    issueUrl,
+    publicIssueUrl,
+    aiReport,
+    triageFailed,
+    needsSpamReview,
+    notified: true,
+  });
 };
