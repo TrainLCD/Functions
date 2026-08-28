@@ -894,9 +894,15 @@ async function loadTriageMarker(
   };
 }
 
+/** マーカー保存の試行回数。KV の一過性エラーで冪等化の記録を落とさないため。 */
+const SAVE_MARKER_ATTEMPTS = 2;
+
 /**
  * 処理済みマーカーを書く。ここで throw すると「Issue は作成済みなのに再試行される」
  * という、まさに防ぎたい状態を作ってしまうため、失敗はログに留める。
+ *
+ * ただし書けなかったマーカーはそのまま重複起票の窓になるので、握り潰す前に
+ * 一度だけ即座に書き直す（KV の書き込み失敗は一過性のことが多い）。
  */
 async function saveTriageMarker(
   env: Env,
@@ -908,15 +914,20 @@ async function saveTriageMarker(
     ...marker,
     updatedAt: new Date().toISOString(),
   };
-  try {
-    await env.STATE_KV.put(triageMarkerKey(reportId), JSON.stringify(value), {
-      expirationTtl: TRIAGE_MARKER_TTL_SECONDS,
-    });
-  } catch (err) {
-    console.error('feedbackTriage: 処理済みマーカーの保存に失敗', {
-      reportId,
-      error: err instanceof Error ? err.message : String(err),
-    });
+  for (let attempt = 1; attempt <= SAVE_MARKER_ATTEMPTS; attempt++) {
+    try {
+      await env.STATE_KV.put(triageMarkerKey(reportId), JSON.stringify(value), {
+        expirationTtl: TRIAGE_MARKER_TTL_SECONDS,
+      });
+      return;
+    } catch (err) {
+      console.error('feedbackTriage: 処理済みマーカーの保存に失敗', {
+        reportId,
+        attempt,
+        maxAttempts: SAVE_MARKER_ATTEMPTS,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }
 

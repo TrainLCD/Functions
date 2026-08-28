@@ -385,8 +385,13 @@ without touching the Issue. The message is still acked either way — the feedba
 is on GitHub, and retrying the whole handler for a Discord outage is what
 created duplicates in the first place.
 
-KV is eventually consistent, so this is not a strict lock. Sequential retries of
-one message are seconds apart at minimum, well past KV's convergence window.
+KV is eventually consistent, so this is not a strict lock — it de-duplicates the
+sequential retries of one message (seconds apart at minimum, well past KV's
+convergence window), not two deliveries of the same report racing each other.
+Cloudflare Queues is at-least-once, so that race is possible in principle;
+serializing it would take a per-report claim in a Durable Object, which is a
+bigger change than the failure it covers. A marker write that fails is retried
+once before being logged, since a lost marker is a duplicate-Issue window.
 
 One gap stays open by design: if the Issue-creation `fetch()` fails *after*
 GitHub has already created the Issue, no marker was written and the retry files

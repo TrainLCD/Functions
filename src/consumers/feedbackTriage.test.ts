@@ -801,6 +801,26 @@ describe('processFeedbackMessage（再試行時の冪等化）', () => {
     ).toBe(true);
   });
 
+  it('マーカー保存が一度失敗しても書き直し、throw しない', async () => {
+    const { env, store } = createEnv();
+    store.set(triageMarkerKey(report.id), marker());
+    let puts = 0;
+    env.STATE_KV.put = jest.fn(async (key: string, value: string) => {
+      puts += 1;
+      if (puts === 1) throw new Error('KV unavailable');
+      store.set(key, value);
+    });
+    const fetchMock = jest.fn(async () => new Response(null, { status: 204 }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(processFeedbackMessage(message, env)).resolves.toBeUndefined();
+
+    expect(puts).toBe(2);
+    expect(
+      JSON.parse(store.get(triageMarkerKey(report.id)) ?? '{}').notified
+    ).toBe(true);
+  });
+
   it('通知まで完了したマーカーがあれば何もしない', async () => {
     const { env, store } = createEnv();
     store.set(triageMarkerKey(report.id), marker({ notified: true }));
