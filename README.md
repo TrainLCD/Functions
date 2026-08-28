@@ -372,19 +372,21 @@ what each delivery still has to do:
   the retry costs no Workers AI neurons.
 - **no marker** — the full path, writing the marker as soon as the Issue exists.
 
-Everything after Issue creation is written so that it cannot throw: Discord
-failures (including `fetch()` itself rejecting on a network or DNS error, which
-is what made this reachable in practice), a malformed Issue-creation response,
-and marker writes are all logged and swallowed. The only rethrow left is a
-failure *before* the Issue exists, which is exactly where a retry helps.
+Nothing between the Issue being created and the marker being written may throw,
+because a throw there is a retry with no marker to stop it. So a malformed
+Issue-creation response and a failed marker write are logged and swallowed, and
+`notifyDiscord()` turns every failure into a return value instead of an
+exception — including `fetch()` itself rejecting on a network or DNS error,
+which is what made this reachable in practice.
 
-Swallowing the notification failure does not mark it done: the marker stores
-whether Discord actually accepted the request, so a failed notification stays
-`notified: false` and the message is retried — the retry reads the marker, skips
-straight to the notification, and leaves the Issue alone. Retrying the handler
-for a Discord outage is exactly what used to duplicate Issues; the marker is
-what makes it safe now. A notification that never succeeds ends up in the DLQ
-after `max_retries`, which is how a broken webhook becomes visible.
+Past that point a throw is safe, and one is deliberate. The marker records
+whether Discord actually accepted the request, so a failed notification is saved
+as `notified: false` and *then* rethrown as `FeedbackNotifyError`, which retries
+the message: the retry reads the marker, skips straight to the notification, and
+leaves the Issue alone. Retrying the handler for a Discord outage is exactly
+what used to duplicate Issues — the marker is what makes it safe now. A
+notification that never succeeds ends up in the DLQ after `max_retries`, which
+is how a broken webhook becomes visible.
 
 The one case that is *not* retried is a notification failure where the marker
 write also failed. Without the marker a retry would file the Issue again, so the
