@@ -385,13 +385,25 @@ without touching the Issue. The message is still acked either way — the feedba
 is on GitHub, and retrying the whole handler for a Discord outage is what
 created duplicates in the first place.
 
-KV is eventually consistent, so this is not a strict lock — it de-duplicates the
-sequential retries of one message (seconds apart at minimum, well past KV's
-convergence window), not two deliveries of the same report racing each other.
-Cloudflare Queues is at-least-once, so that race is possible in principle;
-serializing it would take a per-report claim in a Durable Object, which is a
-bigger change than the failure it covers. A marker write that fails is retried
-once before being logged, since a lost marker is a duplicate-Issue window.
+**KV is not a lock, and the marker read is what makes this work — so the retry
+has to be slow enough for the read to see it.** KV caches the *absence* of a key
+at the edge for the read's `cacheTtl` (60 s by default), so a retry that runs
+immediately after the failure can miss a marker that was written seconds ago and
+file the Issue again. The consumer therefore retries with
+`message.retry({ delaySeconds: FEEDBACK_RETRY_DELAY_SECONDS })` (90 s) so the
+negative cache has expired by the time the marker is read. Changing that
+constant without understanding this is how the duplicate comes back.
+
+The same limit applies to the writes: KV accepts at most one write per second to
+a given key, so the one marker-write retry waits ~1.1 s before trying again
+rather than failing for the same reason twice.
+
+That covers the sequential retries of one message. It does **not** serialize two
+deliveries of the same report racing each other — Cloudflare Queues is
+at-least-once, so that race is possible in principle, and with an eventually
+consistent read there is nothing to make it safe. Strict de-duplication would
+take a per-report claim in a Durable Object (the only strongly consistent option
+here), which is a bigger change than the failure it covers.
 
 One gap stays open by design: if the Issue-creation `fetch()` fails *after*
 GitHub has already created the Issue, no marker was written and the retry files

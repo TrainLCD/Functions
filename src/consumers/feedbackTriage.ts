@@ -898,6 +898,21 @@ async function loadTriageMarker(
 const SAVE_MARKER_ATTEMPTS = 2;
 
 /**
+ * マーカー保存を書き直すまでの待ち時間。KV は同一キーへの書き込みを 1 秒に 1 回
+ * までしか受け付けないため、即座に書き直しても同じ理由で失敗する。
+ */
+const SAVE_MARKER_RETRY_DELAY_MS = 1100;
+
+/**
+ * 失敗したメッセージを再試行に回すまでの待ち時間。
+ *
+ * KV はキーが無かったという結果も cacheTtl（既定 60 秒）の間エッジにキャッシュ
+ * するため、遅延なしで再試行すると、起票直後に書いたマーカーを読めずに
+ * Issue を作り直してしまう。ネガティブキャッシュが切れてから再試行させる。
+ */
+export const FEEDBACK_RETRY_DELAY_SECONDS = 90;
+
+/**
  * 処理済みマーカーを書く。ここで throw すると「Issue は作成済みなのに再試行される」
  * という、まさに防ぎたい状態を作ってしまうため、失敗はログに留める。
  *
@@ -915,6 +930,11 @@ async function saveTriageMarker(
     updatedAt: new Date().toISOString(),
   };
   for (let attempt = 1; attempt <= SAVE_MARKER_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, SAVE_MARKER_RETRY_DELAY_MS)
+      );
+    }
     try {
       await env.STATE_KV.put(triageMarkerKey(reportId), JSON.stringify(value), {
         expirationTtl: TRIAGE_MARKER_TTL_SECONDS,
