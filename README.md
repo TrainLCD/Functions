@@ -380,10 +380,16 @@ failure *before* the Issue exists, which is exactly where a retry helps.
 
 Swallowing the notification failure does not mark it done: the marker stores
 whether Discord actually accepted the request, so a failed notification stays
-`notified: false` and re-delivering the message (a DLQ replay) sends it again
-without touching the Issue. The message is still acked either way — the feedback
-is on GitHub, and retrying the whole handler for a Discord outage is what
-created duplicates in the first place.
+`notified: false` and the message is retried — the retry reads the marker, skips
+straight to the notification, and leaves the Issue alone. Retrying the handler
+for a Discord outage is exactly what used to duplicate Issues; the marker is
+what makes it safe now. A notification that never succeeds ends up in the DLQ
+after `max_retries`, which is how a broken webhook becomes visible.
+
+The one case that is *not* retried is a notification failure where the marker
+write also failed. Without the marker a retry would file the Issue again, so the
+notification is given up and the message acked — the feedback is on GitHub
+either way.
 
 **KV is not a lock, and the marker read is what makes this work — so the retry
 has to be slow enough for the read to see it.** KV caches the *absence* of a key

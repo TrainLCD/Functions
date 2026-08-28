@@ -778,9 +778,40 @@ describe('processFeedbackMessage（再試行時の冪等化）', () => {
     expect(writeAt[1] - writeAt[0]).toBeGreaterThanOrEqual(1000);
   });
 
-  it('Discord への fetch が throw しても再送出しない（再試行による重複起票を防ぐ）', async () => {
+  it('Discord への fetch が throw したら未通知として再試行に回す（起票は 1 回だけ）', async () => {
     const msg = makeMessage();
     const { env, store } = createEnv();
+    const fetchMock = jest.fn(async (input: unknown) => {
+      if (String(input) === ISSUES_API) {
+        return new Response(
+          JSON.stringify({
+            html_url: 'https://github.com/TrainLCD/Issues/issues/42',
+            number: 42,
+          }),
+          { status: 201 }
+        );
+      }
+      throw new TypeError('network error');
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(processFeedbackMessage(msg, env)).rejects.toThrow(
+      'Discord notification failed'
+    );
+
+    expect(githubCalls(fetchMock)).toHaveLength(1);
+    const saved = JSON.parse(store.get(triageMarkerKey(msg.report.id)) ?? '{}');
+    expect(saved.issueNumber).toBe(42);
+    // 未通知のまま残し、再試行では起票を飛ばして通知だけやり直す
+    expect(saved.notified).toBe(false);
+  });
+
+  it('通知にもマーカー保存にも失敗したら再試行しない（重複起票に戻るため）', async () => {
+    const msg = makeMessage();
+    const { env } = createEnv();
+    env.STATE_KV.put = jest.fn(async () => {
+      throw new Error('KV unavailable');
+    });
     const fetchMock = jest.fn(async (input: unknown) => {
       if (String(input) === ISSUES_API) {
         return new Response(
@@ -798,10 +829,6 @@ describe('processFeedbackMessage（再試行時の冪等化）', () => {
     await expect(processFeedbackMessage(msg, env)).resolves.toBeUndefined();
 
     expect(githubCalls(fetchMock)).toHaveLength(1);
-    const saved = JSON.parse(store.get(triageMarkerKey(msg.report.id)) ?? '{}');
-    expect(saved.issueNumber).toBe(42);
-    // 未通知のまま残し、再投入したときに通知だけやり直せるようにする
-    expect(saved.notified).toBe(false);
   });
 
   it('Discord が HTTP エラーを返したときも未通知のまま記録する', async () => {
@@ -813,7 +840,9 @@ describe('processFeedbackMessage（再試行時の冪等化）', () => {
     );
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    await processFeedbackMessage(msg, env);
+    await expect(processFeedbackMessage(msg, env)).rejects.toThrow(
+      'Discord notification failed'
+    );
 
     expect(discordCalls(fetchMock)).toHaveLength(1);
     expect(

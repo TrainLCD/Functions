@@ -837,6 +837,17 @@ export type TriageMarker = {
  */
 export const TRIAGE_MARKER_TTL_SECONDS = 60 * 60 * 24 * 30;
 
+/**
+ * Discord 通知だけが失敗したことを示す。queue ハンドラはこれを受けて再試行し、
+ * 再試行はマーカーを見て通知から再開する（Issue は作り直さない）。
+ */
+export class FeedbackNotifyError extends Error {
+  constructor(reportId: string) {
+    super(`Discord notification failed for report ${reportId}`);
+    this.name = 'FeedbackNotifyError';
+  }
+}
+
 /** 処理済みマーカーの KV キー。 */
 export const triageMarkerKey = (reportId: string): string =>
   `feedbackTriage:processed:${reportId}`;
@@ -933,10 +944,11 @@ async function waitForMarkerWriteWindow(
 
 /**
  * 処理済みマーカーを書く。ここで throw すると「Issue は作成済みなのに再試行される」
- * という、まさに防ぎたい状態を作ってしまうため、失敗はログに留める。
+ * という、まさに防ぎたい状態を作ってしまうため、失敗はログに留めて false を返す。
+ * 呼び出し側は、マーカーを残せたかどうかで再試行してよいかを判断する。
  *
- * ただし書けなかったマーカーはそのまま重複起票の窓になるので、握り潰す前に
- * 一度だけ書き直す（KV の書き込み失敗は一過性のことが多い）。
+ * 書けなかったマーカーはそのまま重複起票の窓になるので、諦める前に一度だけ
+ * 書き直す（KV の書き込み失敗は一過性のことが多い）。
  *
  * 1 件のレポートでは、起票直後（notified: false）と通知後（notified の実結果）の
  * 2 回、同じキーに書く。通知が 1 秒以内に終わると KV の同一キー書き込み制限に
@@ -946,7 +958,7 @@ async function saveTriageMarker(
   env: Env,
   reportId: string,
   marker: Omit<TriageMarker, 'version' | 'updatedAt'>
-): Promise<void> {
+): Promise<boolean> {
   const key = triageMarkerKey(reportId);
   for (let attempt = 1; attempt <= SAVE_MARKER_ATTEMPTS; attempt++) {
     await waitForMarkerWriteWindow(
@@ -964,7 +976,7 @@ async function saveTriageMarker(
       });
       lastMarkerWriteAt.set(key, Date.now());
       pruneMarkerWriteTimes();
-      return;
+      return true;
     } catch (err) {
       console.error('feedbackTriage: 処理済みマーカーの保存に失敗', {
         reportId,
@@ -974,6 +986,7 @@ async function saveTriageMarker(
       });
     }
   }
+  return false;
 }
 
 /** 書き込み時刻の記録が isolate に溜まり続けないよう、間隔を過ぎたものを捨てる。 */
@@ -1493,15 +1506,32 @@ ${reporterUid}
     publicIssueUrl,
   });
 
-  await saveTriageMarker(env, id, {
+  const markerSaved = await saveTriageMarker(env, id, {
     issueNumber,
     issueUrl,
     publicIssueUrl,
     aiReport,
     triageFailed,
     needsSpamReview,
-    // 通知に失敗したときは未通知のまま残す。メッセージを再投入すれば、起票を
-    // 飛ばして通知だけやり直せる（成功したことにすると通知が永久に届かない）。
+    // 通知に失敗したときは未通知のまま残す。再試行では起票を飛ばして通知だけ
+    // やり直す（成功したことにすると通知が永久に届かない）。
     notified,
   });
+
+  if (notified) return;
+
+  if (!markerSaved) {
+    // マーカーを残せなかったので、再試行すると Issue を作り直してしまう。
+    // 通知を諦めて ack する（フィードバック自体は起票済みで失われない）。
+    console.error(
+      'feedbackTriage: 通知に失敗したがマーカーも残せなかったため再試行しない',
+      { reportId: id, issueNumber }
+    );
+    return;
+  }
+
+  // 起票済みなので、再試行してもマーカーを見て通知から再開する（重複起票しない）。
+  // max_retries を使い切ったメッセージは DLQ に残り、Discord 側の障害・設定ミスに
+  // 気づける。
+  throw new FeedbackNotifyError(id);
 };
