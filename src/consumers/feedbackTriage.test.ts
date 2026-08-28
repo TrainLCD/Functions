@@ -764,13 +764,30 @@ describe('processFeedbackMessage（再試行時の冪等化）', () => {
     expect(githubCalls(fetchMock)).toHaveLength(1);
     const saved = JSON.parse(store.get(triageMarkerKey(report.id)) ?? '{}');
     expect(saved.issueNumber).toBe(42);
-    expect(saved.notified).toBe(true);
+    // 未通知のまま残し、再投入したときに通知だけやり直せるようにする
+    expect(saved.notified).toBe(false);
+  });
+
+  it('Discord が HTTP エラーを返したときも未通知のまま記録する', async () => {
+    const { env, store } = createEnv();
+    store.set(triageMarkerKey(report.id), marker());
+    const fetchMock = jest.fn(
+      async () => new Response('rate limited', { status: 429 })
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await processFeedbackMessage(message, env);
+
+    expect(discordCalls(fetchMock)).toHaveLength(1);
+    expect(
+      JSON.parse(store.get(triageMarkerKey(report.id)) ?? '{}').notified
+    ).toBe(false);
   });
 
   it('起票済みマーカーがあれば Issue を作り直さず、通知だけやり直す', async () => {
     const { env, store } = createEnv();
     store.set(triageMarkerKey(report.id), marker());
-    const fetchMock = jest.fn(async () => new Response('', { status: 204 }));
+    const fetchMock = jest.fn(async () => new Response(null, { status: 204 }));
     global.fetch = fetchMock as unknown as typeof fetch;
 
     await processFeedbackMessage(message, env);
@@ -787,7 +804,7 @@ describe('processFeedbackMessage（再試行時の冪等化）', () => {
   it('通知まで完了したマーカーがあれば何もしない', async () => {
     const { env, store } = createEnv();
     store.set(triageMarkerKey(report.id), marker({ notified: true }));
-    const fetchMock = jest.fn(async () => new Response('', { status: 204 }));
+    const fetchMock = jest.fn(async () => new Response(null, { status: 204 }));
     global.fetch = fetchMock as unknown as typeof fetch;
 
     await processFeedbackMessage(message, env);

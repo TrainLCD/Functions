@@ -378,6 +378,13 @@ is what made this reachable in practice), a malformed Issue-creation response,
 and marker writes are all logged and swallowed. The only rethrow left is a
 failure *before* the Issue exists, which is exactly where a retry helps.
 
+Swallowing the notification failure does not mark it done: the marker stores
+whether Discord actually accepted the request, so a failed notification stays
+`notified: false` and re-delivering the message (a DLQ replay) sends it again
+without touching the Issue. The message is still acked either way — the feedback
+is on GitHub, and retrying the whole handler for a Discord outage is what
+created duplicates in the first place.
+
 KV is eventually consistent, so this is not a strict lock. Sequential retries of
 one message are seconds apart at minimum, well past KV's convergence window.
 

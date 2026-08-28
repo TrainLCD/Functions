@@ -1037,6 +1037,9 @@ async function triageFeedback(
  * queue ハンドラが再試行し、同一レポートで Issue が重複作成される。
  * webhook URL 未設定・HTTP エラーに加え、fetch 自体の失敗（ネットワーク断・DNS
  * 失敗・不正な URL）も含めて、あらゆる失敗をログに留めて握り潰す。
+ *
+ * 戻り値は「通知を送り終えたか」。false のときは処理済みマーカーを未通知のまま
+ * 残し、メッセージを再投入したときに通知だけやり直せるようにする。
  */
 async function notifyDiscord(
   env: Env,
@@ -1050,7 +1053,7 @@ async function notifyDiscord(
     issueUrl: string | null;
     publicIssueUrl: string | null;
   }
-): Promise<void> {
+): Promise<boolean> {
   const {
     report,
     aiReport,
@@ -1167,7 +1170,7 @@ async function notifyDiscord(
       case 'feedback': {
         if (!csWHUrl) {
           console.error('DISCORD_CS_WEBHOOK_URL is not set; skipping notify');
-          break;
+          return false;
         }
         const whRes = await fetch(csWHUrl, {
           method: 'POST',
@@ -1183,15 +1186,16 @@ async function notifyDiscord(
         if (!whRes.ok) {
           const msg = await whRes.text().catch(() => '');
           console.error('Discord CS webhook failed', whRes.status, msg);
+          return false;
         }
-        break;
+        return true;
       }
       case 'crash': {
         if (!crashWHUrl) {
           console.error(
             'DISCORD_CRASH_WEBHOOK_URL is not set; skipping notify'
           );
-          break;
+          return false;
         }
         const whRes = await fetch(crashWHUrl, {
           method: 'POST',
@@ -1201,11 +1205,13 @@ async function notifyDiscord(
         if (!whRes.ok) {
           const msg = await whRes.text().catch(() => '');
           console.error('Discord Crash webhook failed', whRes.status, msg);
+          return false;
         }
-        break;
+        return true;
       }
       default:
-        break;
+        // 通知先のない種別。送るものがないので「通知済み」として扱う。
+        return true;
     }
   } catch (err) {
     // fetch 自体の失敗（ネットワークエラー等）。再送出すると Issue が重複するため握り潰す。
@@ -1213,6 +1219,7 @@ async function notifyDiscord(
       reportId: id,
       error: err instanceof Error ? err.message : String(err),
     });
+    return false;
   }
 }
 
@@ -1411,7 +1418,7 @@ ${reporterUid}
     });
   }
 
-  await notifyDiscord(env, {
+  const notified = await notifyDiscord(env, {
     report,
     aiReport,
     shouldTagTriage,
@@ -1429,6 +1436,8 @@ ${reporterUid}
     aiReport,
     triageFailed,
     needsSpamReview,
-    notified: true,
+    // 通知に失敗したときは未通知のまま残す。メッセージを再投入すれば、起票を
+    // 飛ばして通知だけやり直せる（成功したことにすると通知が永久に届かない）。
+    notified,
   });
 };
