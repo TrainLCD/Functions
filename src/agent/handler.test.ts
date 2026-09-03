@@ -365,7 +365,7 @@ describe('runAgentTurn', () => {
     );
     await runAgentTurn({
       ...baseParams,
-      model: 'gemini-3.7-flash' as AnyFn,
+      model: 'gemini-3.8-flash' as AnyFn,
       streamText,
       searchStations: jest.fn(),
     });

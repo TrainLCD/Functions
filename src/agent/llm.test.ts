@@ -48,12 +48,12 @@ describe('resolveAgentModel', () => {
     const model = asStub(
       resolveAgentModel(
         makeEnv({
-          AGENT_MODEL: 'google:gemini-3.7-flash',
+          AGENT_MODEL: 'google:gemini-3.8-flash',
           GOOGLE_VERTEX_SA_KEY: SA_KEY,
         })
       )
     );
-    expect(model.modelId).toBe('gemini-3.7-flash');
+    expect(model.modelId).toBe('gemini-3.8-flash');
     // プロジェクトは鍵の project_id を既定にし、ロケーションは global
     expect(model.options?.project).toBe('sa-project');
     expect(model.options?.location).toBe('global');
@@ -73,7 +73,7 @@ describe('resolveAgentModel', () => {
     const model = asStub(
       resolveAgentModel(
         makeEnv({
-          AGENT_MODEL: 'google:gemini-3.7-flash',
+          AGENT_MODEL: 'google:gemini-3.8-flash',
           GOOGLE_VERTEX_SA_KEY: SA_KEY,
           GOOGLE_VERTEX_PROJECT: 'other-project',
           GOOGLE_VERTEX_LOCATION: 'asia-northeast1',
@@ -88,7 +88,7 @@ describe('resolveAgentModel', () => {
     const model = asStub(
       resolveAgentModel(
         makeEnv({
-          AGENT_MODEL: 'google:gemini-3.7-flash',
+          AGENT_MODEL: 'google:gemini-3.8-flash',
           GOOGLE_VERTEX_SA_KEY: SA_KEY,
           GOOGLE_VERTEX_LOCATION: 'asia-northeast1',
           // 末尾スラッシュの揺れも吸収する
@@ -107,7 +107,7 @@ describe('resolveAgentModel', () => {
 
   it('google: で鍵が無ければエラーにする', () => {
     expect(() =>
-      resolveAgentModel(makeEnv({ AGENT_MODEL: 'google:gemini-3.7-flash' }))
+      resolveAgentModel(makeEnv({ AGENT_MODEL: 'google:gemini-3.8-flash' }))
     ).toThrow('GOOGLE_VERTEX_SA_KEY is not configured');
   });
 
@@ -115,7 +115,7 @@ describe('resolveAgentModel', () => {
     expect(() =>
       resolveAgentModel(
         makeEnv({
-          AGENT_MODEL: 'google:gemini-3.7-flash',
+          AGENT_MODEL: 'google:gemini-3.8-flash',
           GOOGLE_VERTEX_SA_KEY: 'not-json',
         })
       )
@@ -124,7 +124,7 @@ describe('resolveAgentModel', () => {
     expect(() =>
       resolveAgentModel(
         makeEnv({
-          AGENT_MODEL: 'google:gemini-3.7-flash',
+          AGENT_MODEL: 'google:gemini-3.8-flash',
           GOOGLE_VERTEX_SA_KEY: JSON.stringify({ project_id: 'p' }),
         })
       )
@@ -135,7 +135,7 @@ describe('resolveAgentModel', () => {
     expect(() =>
       resolveAgentModel(
         makeEnv({
-          AGENT_MODEL: 'google:gemini-3.7-flash',
+          AGENT_MODEL: 'google:gemini-3.8-flash',
           GOOGLE_VERTEX_SA_KEY: JSON.stringify({
             client_email: 'a@b.iam.gserviceaccount.com',
             private_key: 'pk',
@@ -147,7 +147,7 @@ describe('resolveAgentModel', () => {
 
   it('未対応のプロバイダ指定はエラーにする', () => {
     expect(() =>
-      resolveAgentModel(makeEnv({ AGENT_MODEL: 'gemini-3.7-flash' }))
+      resolveAgentModel(makeEnv({ AGENT_MODEL: 'gemini-3.8-flash' }))
     ).toThrow(/unsupported AGENT_MODEL/);
   });
 });
@@ -159,7 +159,7 @@ describe('resolveGoogleReasoningSetting', () => {
 
   it('3 系は受理される最小値の low まで下げる', () => {
     // 'none' は thinkingLevel: minimal に変換され、Vertex に 400 で拒否される
-    expect(resolveGoogleReasoningSetting('gemini-3.7-flash')).toBe('low');
+    expect(resolveGoogleReasoningSetting('gemini-3.8-flash')).toBe('low');
     expect(resolveGoogleReasoningSetting('gemini-3-flash-preview')).toBe('low');
   });
 
@@ -172,6 +172,6 @@ describe('resolveGoogleReasoningSetting', () => {
   });
 
   it('OpenAI 向けの抑制指定は Gemini に反応しない', () => {
-    expect(resolveOpenAIReasoningOptions('gemini-3.7-flash')).toBeUndefined();
+    expect(resolveOpenAIReasoningOptions('gemini-3.8-flash')).toBeUndefined();
   });
 });

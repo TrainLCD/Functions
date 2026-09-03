@@ -105,7 +105,7 @@ The conversational agent picks its provider from `AGENT_MODEL`, written as
 | ------------------------- | ----------------------- | ---------------------- |
 | `openai:gpt-5.6-luna`     | OpenAI                  | `OPENAI_API_KEY`       |
 | `anthropic:<model>`       | Anthropic               | `ANTHROPIC_API_KEY`    |
-| `google:gemini-3.7-flash` | Google Vertex AI        | `GOOGLE_VERTEX_SA_KEY` |
+| `google:gemini-3.8-flash` | Google Vertex AI        | `GOOGLE_VERTEX_SA_KEY` |
 
 Switching providers is a vars-only change (`wrangler deploy`) **as long as that
 provider's secret is already set** — no code change is needed. If it is missing,
