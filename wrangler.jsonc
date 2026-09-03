@@ -76,7 +76,7 @@
     // --- AI エージェント（/agent/chat）---
     // モデルは "anthropic:<model>" | "openai:<model>" | "google:<model>"。比較検証で差し替える
     // （"google:" は Vertex AI 経由。API キーではなく GOOGLE_VERTEX_SA_KEY が必要）
-    "AGENT_MODEL": "google:gemini-3.7-flash",
+    "AGENT_MODEL": "google:gemini-3.8-flash",
     // Vertex AI 用（AGENT_MODEL が google: のときのみ使う）。
     // GOOGLE_VERTEX_PROJECT 未設定なら GOOGLE_VERTEX_SA_KEY の project_id を使う。
     // ロケーションは "global" がモデルの提供範囲が最も広い。特定リージョンに寄せるなら
@@ -144,7 +144,7 @@
         "FEW_SHOT_LIMIT": "16",
         "FEW_SHOT_PER_EX_MAX": "800",
         // --- AI エージェント（/agent/chat）---
-        "AGENT_MODEL": "google:gemini-3.7-flash",
+        "AGENT_MODEL": "google:gemini-3.8-flash",
         "GOOGLE_VERTEX_LOCATION": "global",
         "AGENT_GATE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
         "AGENT_FAQ_KV_KEY": "config:agent-faq",
