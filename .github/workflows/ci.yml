@@ -23,6 +23,11 @@ on:
       - "wrangler.jsonc"
       - ".github/actions/verify/action.yml"
       - ".github/workflows/ci.yml"
+      # deploy 用の 2 ファイルはどちらも pull_request で起動しないため、
+      # ここに載せておかないと変更した PR がどの workflow も通らないまま
+      # マージされ、デプロイ時に初めて動くことになる。
+      - ".github/workflows/deploy_dev.yml"
+      - ".github/workflows/deploy_production.yml"
   push:
     # dev / master は deploy_dev.yml / deploy_production.yml が同じ composite
     # action で検証してからデプロイするため、ここでは走らせない。
@@ -41,6 +46,11 @@ on:
       - "wrangler.jsonc"
       - ".github/actions/verify/action.yml"
       - ".github/workflows/ci.yml"
+      # deploy 用の 2 ファイルはどちらも pull_request で起動しないため、
+      # ここに載せておかないと変更した PR がどの workflow も通らないまま
+      # マージされ、デプロイ時に初めて動くことになる。
+      - ".github/workflows/deploy_dev.yml"
+      - ".github/workflows/deploy_production.yml"
   workflow_dispatch:
 
 name: Continuous integration
