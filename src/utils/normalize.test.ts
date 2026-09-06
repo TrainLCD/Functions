@@ -43,10 +43,24 @@ describe('utils/normalize.ts', () => {
     expect(normalizeRomanText('Keiseibus')).toBe('Keiseibus');
   });
 
+  it('replaces Seibu with a spelling English TTS reads as せいぶ', () => {
+    expect(
+      normalizeRomanText('Change here for the Seibu Ikebukuro Line.')
+    ).toBe('Change here for the Say-boo Ikebukuro Line.');
+    expect(normalizeRomanText('The next station is Seibu-Shinjuku.')).toBe(
+      'The next station is Say-boo-shinjuku.'
+    );
+    // 西武園 (Seibuen) は 1 語なので語単位の一致では対象外
+    expect(normalizeRomanText('Seibuen')).toBe('Seibuen');
+  });
+
   it('keeps Kay-say stable when normalized twice', () => {
     // 二重に適用しても結果が変わらないこと（キャッシュキーの安定性）
     expect(normalizeRomanText(normalizeRomanText('Keisei Main Line'))).toBe(
       'Kay-say Main Line'
+    );
+    expect(normalizeRomanText(normalizeRomanText('Seibu Shinjuku Line'))).toBe(
+      'Say-boo Shinjuku Line'
     );
   });
 
