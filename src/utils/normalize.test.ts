@@ -30,6 +30,26 @@ describe('utils/normalize.ts', () => {
     );
   });
 
+  it('replaces Keisei with a spelling English TTS reads as けいせい', () => {
+    // 英語 TTS は "Keisei" を「かいせい」と読むため、辞書語の綴りへ倒す
+    expect(normalizeRomanText('Change here for the Keisei Main Line.')).toBe(
+      'Change here for the Kay-say Main Line.'
+    );
+    expect(normalizeRomanText('The next station is Keisei-Ueno.')).toBe(
+      'The next station is Kay-say-ueno.'
+    );
+    expect(normalizeRomanText('KEISEI SKYLINER')).toBe('Kay-say Skyliner');
+    // 別語の一部は置換しない
+    expect(normalizeRomanText('Keiseibus')).toBe('Keiseibus');
+  });
+
+  it('keeps Kay-say stable when normalized twice', () => {
+    // 二重に適用しても結果が変わらないこと（キャッシュキーの安定性）
+    expect(normalizeRomanText(normalizeRomanText('Keisei Main Line'))).toBe(
+      'Kay-say Main Line'
+    );
+  });
+
   it.each(['Tokyo', 'tOkyo'])('text: %s', (text) => {
     expect(normalizeRomanText(text)).toBe('Tokyo');
   });
