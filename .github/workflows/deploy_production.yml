@@ -1,0 +1,68 @@
+# master を production (trainlcd-worker) へデプロイする。
+#
+# デプロイ先はこのファイルとトリガで固定してある。ブランチを式で判定して
+# 環境を選ぶ作りにすると、environment は if: と違ってジョブが走れば必ず
+# 適用されるため、意図しないブランチがこの環境の履歴と Secret に触れる。
+on:
+  push:
+    branches:
+      - master
+    # GitHub Actions は YAML のアンカー / エイリアスを解釈しないため、
+    # このリストは ci.yml / deploy_dev.yml とも二重に書く必要がある。
+    # 片方だけ直さないこと。
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "biome.json"
+      - "jest.config.js"
+      - "wrangler.jsonc"
+      - ".github/actions/verify/action.yml"
+      - ".github/workflows/deploy_production.yml"
+  workflow_dispatch:
+
+name: Deploy to production
+
+# 同時に流れると、先に始まった古い版が後から上書きしうる。
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Verify and deploy to production
+    runs-on: ubuntu-latest
+
+    # workflow_dispatch にはブランチ絞り込みが無いので、ここで塞ぐ。
+    # push は on: branches で master に限定済み。
+    if: github.ref == 'refs/heads/master'
+
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/verify
+
+      # 直前の検証で --dry-run 済みのものと同じ入力から同じバンドルが組み上がる。
+      # wrangler は node_modules から解決されるので、検証と同じ版が走る。
+      #
+      # production は wrangler.jsonc の env.production を指す。
+      #
+      # Worker の secrets (SESSION_JWT_SECRET など) はここでは触らない。
+      # deploy は既存の secrets を保持するため、投入は scripts/put-secrets.sh で
+      # 手元から行う運用のままでよい。
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        run: npx wrangler deploy --env production

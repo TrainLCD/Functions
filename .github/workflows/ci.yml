@@ -1,0 +1,75 @@
+# lint / typecheck / test が通ることと、Worker がバンドルできることを検証する
+# だけのワークフロー。デプロイはしない。
+#
+# デプロイは環境ごとに別ファイルへ分けてある:
+#   dev    -> deploy_dev.yml        (trainlcd-worker-dev)
+#   master -> deploy_production.yml (trainlcd-worker)
+# デプロイ先をトリガとファイルで固定することで、他のブランチが誤って
+# どこかの環境へ向くことがないようにしている。
+on:
+  pull_request:
+    # GitHub Actions は YAML のアンカー / エイリアスを解釈しないため、
+    # このリストは push 側とも、デプロイ用の 2 ファイルとも二重に書く必要が
+    # ある。片方だけ直さないこと。
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "biome.json"
+      - "jest.config.js"
+      - "wrangler.jsonc"
+      - ".github/actions/verify/action.yml"
+      - ".github/workflows/ci.yml"
+  push:
+    # dev / master は deploy_dev.yml / deploy_production.yml が同じ composite
+    # action で検証してからデプロイするため、ここでは走らせない。
+    branches-ignore:
+      - dev
+      - master
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "biome.json"
+      - "jest.config.js"
+      - "wrangler.jsonc"
+      - ".github/actions/verify/action.yml"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+name: Continuous integration
+
+# 同じ PR / ブランチに続けて push したとき、古い方は結果が要らない。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint, typecheck, test and build
+    runs-on: ubuntu-latest
+
+    # ここでは environment を宣言しない。environment は if: と違って
+    # ジョブが走れば必ず適用されるため、宣言すると全ブランチ・全 PR が
+    # その環境へのデプロイとして履歴に載り、環境 Secret (デプロイ用の
+    # CLOUDFLARE_API_TOKEN を含む) が任意のブランチのビルドから触れる。
+    #
+    # 検証は --dry-run で Cloudflare API を叩かないため、そもそも認証情報が要らない。
+    steps:
+      # checkout は既定で GITHUB_TOKEN を .git/config に残す。後続の npm ci は
+      # 依存パッケージの install スクリプトを実行するため読み取られうる。
+      # ここから先で git 認証は使わない。
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/verify

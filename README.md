@@ -134,6 +134,45 @@ npm run deploy:prod    # wrangler deploy --env production
 npm run tail           # follow logs
 ```
 
+### CI / CD (GitHub Actions)
+
+Deploys run from GitHub Actions. The target is fixed by the workflow file and
+its trigger rather than chosen by an expression, so no branch can point at an
+environment it was not meant to reach:
+
+| Workflow                             | Trigger                          | Result                              |
+| ------------------------------------ | -------------------------------- | ----------------------------------- |
+| `.github/workflows/ci.yml`           | PRs, and pushes to other branches | Verify only, no deploy              |
+| `.github/workflows/deploy_dev.yml`   | push to `dev`                    | Deploy `trainlcd-worker-dev`        |
+| `.github/workflows/deploy_production.yml` | push to `master`            | Deploy `trainlcd-worker`            |
+
+All three run the same `.github/actions/verify` composite action first — `npm
+ci`, lint, typecheck, tests, and a `wrangler deploy --dry-run` of **both** the
+dev and the production config. The dry run bundles the Worker for real, so
+import mistakes and missing `nodejs_compat` APIs fail there rather than at
+deploy time, and building the production config on every run catches an
+`env.production` that only breaks after the merge to `master`. `npm ci` installs
+wrangler from `package-lock.json`, so the version that deploys is the version
+the lockfile pins — there is no second place to bump.
+
+Each deploy workflow needs two secrets on its GitHub environment (`dev` and
+`production` respectively):
+
+- `CLOUDFLARE_API_TOKEN` — the *Edit Cloudflare Workers* template plus
+  **Queues: Edit**, since `wrangler deploy` also applies the queue consumer
+  settings from `wrangler.jsonc`.
+- `CLOUDFLARE_ACCOUNT_ID` — `wrangler.jsonc` carries no `account_id`.
+
+Keeping them on the environment rather than on the repository is what stops an
+arbitrary branch from reading the production token: `ci.yml` deliberately
+declares no `environment`, and it needs no credentials because `--dry-run` never
+calls the Cloudflare API.
+
+Worker secrets (`SESSION_JWT_SECRET`, `OCTOKIT_PAT`, …) are **not** touched by
+the workflows. `wrangler deploy` preserves the secrets already on a Worker, so
+they stay a manual `scripts/put-secrets.sh` step — see [Setting
+secrets](#setting-secrets).
+
 ## Client wire protocol
 
 `POST /tts` and `POST /postFeedback` keep the Firebase callable-compatible wire
