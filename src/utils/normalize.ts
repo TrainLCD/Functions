@@ -35,6 +35,14 @@ const normalizeTextNode = (text: string): string =>
     // 明治神宮前駅等の駅名にバッククォートが含まれる場合があるため除去
     .replace(/`/g, '')
     .replace(/JR/gi, 'J-R')
+    // 「Keisei（京成）」「Seibu（西武）」は英語 TTS が "ei" を /aɪ/ と推定して
+    // 「かいせい」「さいぶ」と読むため、英単語 "Kay" + "say" / "Say" + "boo" で
+    // /keɪ.seɪ/（けいせい）/ /seɪ.buː/（せいぶ）を確定させる。読み替え先を
+    // 未知語の綴りにすると G2P の推定に戻ってエンジンごとに結果がぶれるので、
+    // 辞書語のハイフン連結にする。単語境界で一致させ、Keisei-Ueno のような
+    // ハイフン連結の駅名も語単位で置換する
+    .replace(/\bKeisei\b/gi, 'Kay-say')
+    .replace(/\bSeibu\b/gi, 'Say-boo')
     // 都営バスを想定
     .replace(/\bSta\./gi, ' Station')
     .replace(/\bUniv\./gi, ' University')
