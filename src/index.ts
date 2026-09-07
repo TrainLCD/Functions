@@ -3,7 +3,10 @@
  * 1 つの Worker に HTTP(fetch) / キュー(queue) / Cron(scheduled) の 3 ハンドラを集約する。
  */
 import { handleAgentChat, handleAgentChatStream } from './agent/handler';
-import { processFeedbackMessage } from './consumers/feedbackTriage';
+import {
+  FEEDBACK_RETRY_DELAY_SECONDS,
+  processFeedbackMessage,
+} from './consumers/feedbackTriage';
 import { withCallable } from './lib/callable';
 import { handleAuthToken } from './routes/auth';
 import { handleMaintenanceConfig, handleRemoteConfig } from './routes/config';
@@ -78,7 +81,10 @@ const worker: ExportedHandler<Env, FeedbackQueueMessage> = {
         message.ack();
       } catch (e) {
         console.error(`Queue message failed (${batch.queue}):`, e);
-        message.retry();
+        // 遅延なしで再試行すると、processFeedbackMessage が起票直後に書いた
+        // 冪等化マーカーを KV のネガティブキャッシュ越しに読めず、Issue を
+        // 作り直してしまう。キャッシュが切れてから再試行させる。
+        message.retry({ delaySeconds: FEEDBACK_RETRY_DELAY_SECONDS });
       }
     }
   },

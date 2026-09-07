@@ -105,7 +105,7 @@ The conversational agent picks its provider from `AGENT_MODEL`, written as
 | ------------------------- | ----------------------- | ---------------------- |
 | `openai:gpt-5.6-luna`     | OpenAI                  | `OPENAI_API_KEY`       |
 | `anthropic:<model>`       | Anthropic               | `ANTHROPIC_API_KEY`    |
-| `google:gemini-3.7-flash` | Google Vertex AI        | `GOOGLE_VERTEX_SA_KEY` |
+| `google:gemini-3.8-flash` | Google Vertex AI        | `GOOGLE_VERTEX_SA_KEY` |
 
 Switching providers is a vars-only change (`wrangler deploy`) **as long as that
 provider's secret is already set** — no code change is needed. If it is missing,
@@ -133,6 +133,45 @@ npm run deploy:dev     # wrangler deploy (dev)
 npm run deploy:prod    # wrangler deploy --env production
 npm run tail           # follow logs
 ```
+
+### CI / CD (GitHub Actions)
+
+Deploys run from GitHub Actions. The target is fixed by the workflow file and
+its trigger rather than chosen by an expression, so no branch can point at an
+environment it was not meant to reach:
+
+| Workflow                             | Trigger                          | Result                              |
+| ------------------------------------ | -------------------------------- | ----------------------------------- |
+| `.github/workflows/ci.yml`           | PRs, and pushes to other branches | Verify only, no deploy              |
+| `.github/workflows/deploy_dev.yml`   | push to `dev`                    | Deploy `trainlcd-worker-dev`        |
+| `.github/workflows/deploy_production.yml` | push to `master`            | Deploy `trainlcd-worker`            |
+
+All three run the same `.github/actions/verify` composite action first — `npm
+ci`, lint, typecheck, tests, and a `wrangler deploy --dry-run` of **both** the
+dev and the production config. The dry run bundles the Worker for real, so
+import mistakes and missing `nodejs_compat` APIs fail there rather than at
+deploy time, and building the production config on every run catches an
+`env.production` that only breaks after the merge to `master`. `npm ci` installs
+wrangler from `package-lock.json`, so the version that deploys is the version
+the lockfile pins — there is no second place to bump.
+
+Each deploy workflow needs two secrets on its GitHub environment (`dev` and
+`production` respectively):
+
+- `CLOUDFLARE_API_TOKEN` — the *Edit Cloudflare Workers* template plus
+  **Queues: Edit**, since `wrangler deploy` also applies the queue consumer
+  settings from `wrangler.jsonc`.
+- `CLOUDFLARE_ACCOUNT_ID` — `wrangler.jsonc` carries no `account_id`.
+
+Keeping them on the environment rather than on the repository is what stops an
+arbitrary branch from reading the production token: `ci.yml` deliberately
+declares no `environment`, and it needs no credentials because `--dry-run` never
+calls the Cloudflare API.
+
+Worker secrets (`SESSION_JWT_SECRET`, `OCTOKIT_PAT`, …) are **not** touched by
+the workflows. `wrangler deploy` preserves the secrets already on a Worker, so
+they stay a manual `scripts/put-secrets.sh` step — see [Setting
+secrets](#setting-secrets).
 
 ## Client wire protocol
 
@@ -352,6 +391,75 @@ it once you have dealt with whatever landed there.
 
 Note that DLQ messages carry the full feedback payload, so the DLQ is subject to
 the same handling rules as the private `TrainLCD/Issues` repo.
+
+### Retry idempotency
+
+A retry re-runs `processFeedbackMessage()` from the top, so anything that throws
+*after* the Issue has been created files the same feedback again — up to four
+Issues with `max_retries: 3`, plus one more for every DLQ replay.
+
+To prevent that, the consumer keeps a per-report marker in `STATE_KV` under
+`feedbackTriage:processed:<report.id>` (30-day TTL, long enough to cover a DLQ
+replay). It records the created Issue number and URL, the public stub URL, the
+triage result, and whether the Discord notification went out. The marker decides
+what each delivery still has to do:
+
+- **notified** — nothing. The message is acked and dropped.
+- **Issue created, not notified** — skip triage and Issue creation, re-send the
+  Discord notification only. The stored triage result is reused instead of being
+  re-inferred, so the notification matches the Issue that was already filed, and
+  the retry costs no Workers AI neurons.
+- **no marker** — the full path, writing the marker as soon as the Issue exists.
+
+Nothing between the Issue being created and the marker being written may throw,
+because a throw there is a retry with no marker to stop it. So a malformed
+Issue-creation response and a failed marker write are logged and swallowed, and
+`notifyDiscord()` turns every failure into a return value instead of an
+exception — including `fetch()` itself rejecting on a network or DNS error,
+which is what made this reachable in practice.
+
+Past that point a throw is safe, and one is deliberate. The marker records
+whether Discord actually accepted the request, so a failed notification is saved
+as `notified: false` and *then* rethrown as `FeedbackNotifyError`, which retries
+the message: the retry reads the marker, skips straight to the notification, and
+leaves the Issue alone. Retrying the handler for a Discord outage is exactly
+what used to duplicate Issues — the marker is what makes it safe now. A
+notification that never succeeds ends up in the DLQ after `max_retries`, which
+is how a broken webhook becomes visible.
+
+The one case that is *not* retried is a notification failure where the marker
+write also failed. Without the marker a retry would file the Issue again, so the
+notification is given up and the message acked — the feedback is on GitHub
+either way.
+
+**KV is not a lock, and the marker read is what makes this work — so the retry
+has to be slow enough for the read to see it.** KV caches the *absence* of a key
+at the edge for the read's `cacheTtl` (60 s by default), so a retry that runs
+immediately after the failure can miss a marker that was written seconds ago and
+file the Issue again. The consumer therefore retries with
+`message.retry({ delaySeconds: FEEDBACK_RETRY_DELAY_SECONDS })` (90 s) so the
+negative cache has expired by the time the marker is read. Changing that
+constant without understanding this is how the duplicate comes back.
+
+The same limit applies to the writes: KV accepts at most one write per second to
+a given key, and one report writes that key twice — once when the Issue exists,
+once when the notification result is known. A notification that completes in
+under a second would make the second write a 429, so the consumer spaces writes
+to the same key ~1.1 s apart (and waits that long before its one write retry)
+rather than losing the notification state and re-notifying on a replay.
+
+That covers the sequential retries of one message. It does **not** serialize two
+deliveries of the same report racing each other — Cloudflare Queues is
+at-least-once, so that race is possible in principle, and with an eventually
+consistent read there is nothing to make it safe. Strict de-duplication would
+take a per-report claim in a Durable Object (the only strongly consistent option
+here), which is a bigger change than the failure it covers.
+
+One gap stays open by design: if the Issue-creation `fetch()` fails *after*
+GitHub has already created the Issue, no marker was written and the retry files
+a second one. Closing that would mean searching `TrainLCD/Issues` by ticket ID
+before every creation, which costs a request per feedback for a case that needs
+GitHub to drop the response of a request it accepted.
 
 ## Public repo routing
 

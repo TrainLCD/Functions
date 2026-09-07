@@ -1,4 +1,6 @@
 import type { AIReport } from '../models/ai';
+import type { Report } from '../models/feedback';
+import type { FeedbackQueueMessage } from '../types';
 import {
   applySpamHeuristic,
   buildFailedReport,
@@ -13,9 +15,11 @@ import {
   NON_ACTIONABLE_TITLE,
   PUBLIC_ISSUE_MIN_CONFIDENCE,
   pickModelResponse,
+  processFeedbackMessage,
   resolvePublicIssueRepo,
   SPAM_OVERRIDE_MAX_CONFIDENCE,
   TRIAGE_FAILED_SUMMARY,
+  triageMarkerKey,
 } from './feedbackTriage';
 
 describe('coerceReport', () => {
@@ -627,5 +631,289 @@ describe('pickModelResponse', () => {
       title: '駅名がずれる',
       isSpam: false,
     });
+  });
+});
+
+describe('processFeedbackMessage（再試行時の冪等化）', () => {
+  const ISSUES_API = 'https://api.github.com/repos/TrainLCD/Issues/issues';
+  const CS_WEBHOOK = 'https://discord.example.com/webhooks/cs';
+
+  const AI_JSON = JSON.stringify({
+    title: 'タイトル',
+    summary: '要約',
+    isSpam: false,
+    labels: [],
+    confidence: 0.9,
+    reason: '理由',
+    category: 'question',
+    triageLevel: 'medium',
+    component: null,
+    componentConfidence: 0,
+  });
+
+  const report: Report = {
+    id: 'report-1',
+    reportType: 'feedback',
+    description: '駅の表示がおかしいので直してほしいです',
+    stacktrace: undefined,
+    resolved: false,
+    resolvedReason: '',
+    language: 'ja-JP',
+    appVersion: '1.0.0',
+    deviceInfo: null,
+    resolverUid: '',
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_000_000,
+    reporterUid: 'uid-1',
+    imageUrl: null,
+    appEdition: 'production',
+    appClip: false,
+    autoModeEnabled: false,
+  };
+
+  // KV の同一キー書き込み制限を守るための待ちがテスト間に持ち越されないよう、
+  // レポートIDはテストごとに変える。
+  let seq = 0;
+  const makeMessage = (): FeedbackQueueMessage => {
+    seq += 1;
+    return {
+      id: `msg-${seq}`,
+      receivedAt: '2024-01-01T00:00:00.000Z',
+      report: { ...report, id: `report-${seq}` },
+      version: 1,
+    };
+  };
+
+  // biome-ignore lint/suspicious/noExplicitAny: テスト用の最小 Env スタブ
+  type TestEnv = any;
+
+  const createEnv = (): { env: TestEnv; store: Map<string, string> } => {
+    const store = new Map<string, string>();
+    return {
+      env: {
+        AI: { run: jest.fn().mockResolvedValue({ response: AI_JSON }) },
+        CONFIG_KV: {
+          get: jest
+            .fn()
+            .mockResolvedValue('{"input":"入力例","output":"出力例"}'),
+        },
+        STATE_KV: {
+          get: jest.fn(async (key: string) => store.get(key) ?? null),
+          put: jest.fn(async (key: string, value: string) => {
+            store.set(key, value);
+          }),
+        },
+        AI_TRIAGE_MODEL: 'test-model',
+        FEW_SHOT_KV_KEY: 'fewshot',
+        FEW_SHOT_LIMIT: '1',
+        FEW_SHOT_PER_EX_MAX: '800',
+        OCTOKIT_PAT: 'pat',
+        DISCORD_CS_WEBHOOK_URL: CS_WEBHOOK,
+        DISCORD_CRASH_WEBHOOK_URL: '',
+      },
+      store,
+    };
+  };
+
+  const marker = (overrides: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      version: 1,
+      issueNumber: 42,
+      issueUrl: 'https://github.com/TrainLCD/Issues/issues/42',
+      publicIssueUrl: null,
+      aiReport: JSON.parse(AI_JSON),
+      triageFailed: false,
+      needsSpamReview: false,
+      notified: false,
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      ...overrides,
+    });
+
+  const originalFetch = global.fetch;
+  let errorSpy: jest.SpyInstance;
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  const githubCalls = (fetchMock: jest.Mock) =>
+    fetchMock.mock.calls.filter((c) => String(c[0]) === ISSUES_API);
+  const discordCalls = (fetchMock: jest.Mock) =>
+    fetchMock.mock.calls.filter((c) => String(c[0]) === CS_WEBHOOK);
+
+  it('起票直後と通知後のマーカー保存を 1 秒以上空ける（KV の同一キー制限）', async () => {
+    const msg = makeMessage();
+    const { env } = createEnv();
+    const writeAt: number[] = [];
+    const originalPut = env.STATE_KV.put;
+    env.STATE_KV.put = jest.fn(async (key: string, value: string) => {
+      writeAt.push(Date.now());
+      return originalPut(key, value);
+    });
+    const fetchMock = jest.fn(async (input: unknown) => {
+      if (String(input) === ISSUES_API) {
+        return new Response(
+          JSON.stringify({
+            html_url: 'https://github.com/TrainLCD/Issues/issues/42',
+            number: 42,
+          }),
+          { status: 201 }
+        );
+      }
+      return new Response(null, { status: 204 });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await processFeedbackMessage(msg, env);
+
+    expect(writeAt).toHaveLength(2);
+    expect(writeAt[1] - writeAt[0]).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('Discord への fetch が throw したら未通知として再試行に回す（起票は 1 回だけ）', async () => {
+    const msg = makeMessage();
+    const { env, store } = createEnv();
+    const fetchMock = jest.fn(async (input: unknown) => {
+      if (String(input) === ISSUES_API) {
+        return new Response(
+          JSON.stringify({
+            html_url: 'https://github.com/TrainLCD/Issues/issues/42',
+            number: 42,
+          }),
+          { status: 201 }
+        );
+      }
+      throw new TypeError('network error');
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(processFeedbackMessage(msg, env)).rejects.toThrow(
+      'Discord notification failed'
+    );
+
+    expect(githubCalls(fetchMock)).toHaveLength(1);
+    const saved = JSON.parse(store.get(triageMarkerKey(msg.report.id)) ?? '{}');
+    expect(saved.issueNumber).toBe(42);
+    // 未通知のまま残し、再試行では起票を飛ばして通知だけやり直す
+    expect(saved.notified).toBe(false);
+  });
+
+  it('通知にもマーカー保存にも失敗したら再試行しない（重複起票に戻るため）', async () => {
+    const msg = makeMessage();
+    const { env } = createEnv();
+    env.STATE_KV.put = jest.fn(async () => {
+      throw new Error('KV unavailable');
+    });
+    const fetchMock = jest.fn(async (input: unknown) => {
+      if (String(input) === ISSUES_API) {
+        return new Response(
+          JSON.stringify({
+            html_url: 'https://github.com/TrainLCD/Issues/issues/42',
+            number: 42,
+          }),
+          { status: 201 }
+        );
+      }
+      throw new TypeError('network error');
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(processFeedbackMessage(msg, env)).resolves.toBeUndefined();
+
+    expect(githubCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it('Discord が HTTP エラーを返したときも未通知のまま記録する', async () => {
+    const msg = makeMessage();
+    const { env, store } = createEnv();
+    store.set(triageMarkerKey(msg.report.id), marker());
+    const fetchMock = jest.fn(
+      async () => new Response('rate limited', { status: 429 })
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(processFeedbackMessage(msg, env)).rejects.toThrow(
+      'Discord notification failed'
+    );
+
+    expect(discordCalls(fetchMock)).toHaveLength(1);
+    expect(
+      JSON.parse(store.get(triageMarkerKey(msg.report.id)) ?? '{}').notified
+    ).toBe(false);
+  });
+
+  it('起票済みマーカーがあれば Issue を作り直さず、通知だけやり直す', async () => {
+    const msg = makeMessage();
+    const { env, store } = createEnv();
+    store.set(triageMarkerKey(msg.report.id), marker());
+    const fetchMock = jest.fn(async () => new Response(null, { status: 204 }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await processFeedbackMessage(msg, env);
+
+    expect(githubCalls(fetchMock)).toHaveLength(0);
+    // 再試行でトリアージをやり直すと Issue と通知の内容がずれるため、AI も呼ばない
+    expect(env.AI.run).not.toHaveBeenCalled();
+    expect(discordCalls(fetchMock)).toHaveLength(1);
+    expect(
+      JSON.parse(store.get(triageMarkerKey(msg.report.id)) ?? '{}').notified
+    ).toBe(true);
+  });
+
+  it('マーカー保存が一度失敗しても書き直し、throw しない', async () => {
+    const msg = makeMessage();
+    const { env, store } = createEnv();
+    store.set(triageMarkerKey(msg.report.id), marker());
+    let puts = 0;
+    env.STATE_KV.put = jest.fn(async (key: string, value: string) => {
+      puts += 1;
+      if (puts === 1) throw new Error('KV unavailable');
+      store.set(key, value);
+    });
+    const fetchMock = jest.fn(async () => new Response(null, { status: 204 }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(processFeedbackMessage(msg, env)).resolves.toBeUndefined();
+
+    expect(puts).toBe(2);
+    expect(
+      JSON.parse(store.get(triageMarkerKey(msg.report.id)) ?? '{}').notified
+    ).toBe(true);
+  });
+
+  it('通知まで完了したマーカーがあれば何もしない', async () => {
+    const msg = makeMessage();
+    const { env, store } = createEnv();
+    store.set(triageMarkerKey(msg.report.id), marker({ notified: true }));
+    const fetchMock = jest.fn(async () => new Response(null, { status: 204 }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await processFeedbackMessage(msg, env);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(env.AI.run).not.toHaveBeenCalled();
+    expect(env.STATE_KV.put).not.toHaveBeenCalled();
+  });
+
+  it('起票前の失敗は再送出し、マーカーを残さない（メッセージを失わないため）', async () => {
+    const msg = makeMessage();
+    const { env, store } = createEnv();
+    const fetchMock = jest.fn(
+      async () => new Response('{"message":"boom"}', { status: 500 })
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(processFeedbackMessage(msg, env)).rejects.toThrow(
+      'GitHub API failed with status 500'
+    );
+    expect(store.has(triageMarkerKey(msg.report.id))).toBe(false);
   });
 });

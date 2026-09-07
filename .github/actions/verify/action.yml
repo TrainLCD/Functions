@@ -1,0 +1,67 @@
+name: Verify worker
+description: >-
+  lockfile どおりに依存を入れて lint / typecheck / test を回し、Worker が実際に
+  バンドルできることを dev・production 双方の設定で確認する。検証用ワークフローと
+  デプロイ用ワークフローで同じ手順を踏むため composite action に切り出してある。
+
+inputs:
+  node-version:
+    description: Node.js のバージョン (package.json の engines と揃えること)
+    required: false
+    default: "22"
+
+# ローカル action は checkout 済みでないと解決できないため、checkout は
+# 呼び出し側のワークフローに置いてある。
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    # npm install と違い package-lock.json を書き換えないので、ローカルで
+    # 動かしたのと同じ wrangler / biome / TypeScript の版で検証できる。
+    # wrangler もこの lockfile から入るため、デプロイに使う版の固定先は
+    # ワークフロー側ではなく package-lock.json 一箇所で済む。
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Lint
+      shell: bash
+      run: npm run lint
+
+    - name: Typecheck
+      shell: bash
+      run: npm run typecheck
+
+    - name: Test
+      shell: bash
+      run: npm test
+
+    # tsc は型しか見ないので、import の解決ミスや nodejs_compat で賄えない
+    # Node API はバンドルして初めて落ちる。--dry-run は Cloudflare API を
+    # 叩かないため認証情報なしで回せる。
+    #
+    # dev と production を両方バンドルするのは、wrangler.jsonc の env.production
+    # 側だけが壊れている状態を master へ入れる前に捕まえるため。dev への push
+    # では production 設定に一切触れないまま緑になってしまう。
+    - name: Build (dry-run)
+      shell: bash
+      env:
+        WRANGLER_SEND_METRICS: "false"
+        # wrangler の色付けが Total Upload 行に混ざると要約が読めなくなる
+        NO_COLOR: "1"
+      run: |
+        # dev は wrangler.jsonc の top-level 設定。wrangler 4 は環境が複数ある
+        # 状態で --env を省くと警告を出すため、空文字でも明示する。
+        for target in "" production; do
+          label="${target:-dev}"
+          npx wrangler deploy --env="$target" --dry-run \
+            --outdir "$RUNNER_TEMP/bundle-$label" 2>&1 | tee "$RUNNER_TEMP/$label.log"
+          # Workers の上限は gzip 後で 10 MiB。今は 1/10 にも届かないので
+          # 失敗にはせず、増え方が見えるよう要約に残すだけにする。
+          size=$(grep -m1 'Total Upload' "$RUNNER_TEMP/$label.log" || true)
+          echo "- \`$label\`: ${size:-size unknown}" >> "$GITHUB_STEP_SUMMARY"
+        done
