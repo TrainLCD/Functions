@@ -307,11 +307,15 @@ function compose(answers: Record<string, Answer>): Verdict {
 
   // 車内放送の書き起こしは「ご利用ありがとうございます」を含むため is_praise_only が
   // 上がる。放送判定を praise ゲートの外に出さないと、放送がそのまま素通りする。
+  //
+  // 感謝ゲートは固定値と比べない。実測で、明確なスパム（is_spam 0.96）が
+  // is_praise_only ちょうど 0.50 で弾かれた。守りたいのは「感謝の方がスパムらしさ
+  // より強いとき」だけなので、両者の大小で判定する。
   const isSpam =
-    announcement >= T.SPAM || (praise < 0.5 && spamSignal >= T.SPAM);
+    announcement >= T.SPAM || (spamSignal >= T.SPAM && praise < spamSignal);
   const needsSpamReview =
     !isSpam &&
-    praise < 0.5 &&
+    praise < spamSignal &&
     Math.max(spamSignal, announcement) >= T.SPAM_REVIEW;
 
   const cat = choice(answers, 'category');
