@@ -43,20 +43,28 @@ function resolveModel(): string {
 
 // ---- TypeSafe API の型（docs.typesafe.ai/api） ----
 
+/**
+ * instructions と criteria は文字列のほか、構造化オブジェクト・配列も取れる
+ * （<https://docs.typesafe.ai/api>）。選択肢が紛らわしいときに what / not_for /
+ * examples のような欄を持つオブジェクトで書き分けられる。欄の名前は API の
+ * 予約語ではなく、こちらで決めてよい。
+ */
+type Description = string | Record<string, unknown> | readonly unknown[];
+
 type NoulQuestion = {
   type: 'noul';
-  instructions: string;
-  criteria?: { true: string; false: string };
+  instructions: Description;
+  criteria?: { true: Description; false: Description };
 };
 type ChoiceQuestion = {
   type: 'choice';
-  instructions: string;
-  criteria: Record<string, string | null>;
+  instructions: Description;
+  criteria: Record<string, Description | null>;
 };
 type ScoreQuestion = {
   type: 'score';
-  instructions: string;
-  criteria: string[];
+  instructions: Description;
+  criteria: readonly Description[];
 };
 type Question = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 
@@ -98,7 +106,7 @@ const QUESTIONS = {
     instructions:
       '`feedback` は、アプリの改善とは無関係な内容か（宣伝、荒らし、無関係な雑談）。',
     criteria: {
-      true: 'アプリの改善に一切つながらない内容。宣伝、荒らし、無関係な雑談。',
+      true: 'アプリの改善に一切つながらない内容。宣伝、荒らし、無関係な雑談、および「テスト」「送信試験」「動作チェック」のように送信を試すためだけの投稿。',
       false:
         '不具合の報告、要望、質問、感謝など、アプリに向けられた内容。書き方が拙くても、内容がアプリに向いていれば該当する。',
     },
@@ -154,19 +162,64 @@ const QUESTIONS = {
     },
   },
   component: {
+    // 実測で station_api -> mobile_app の取り違えが 4 件出た（ナンバリング記号・
+    // 路線カラー・ロゴ・イメージカラー）。いずれも「表示が誤っている」と読めるため、
+    // 値が誤っているのか描画が誤っているのかを focus と not_for で明示する。
     type: 'choice',
-    instructions:
-      '`feedback` が報告している事象の原因は、どこにあると考えられるか。',
+    instructions: {
+      question:
+        '`feedback` が報告している事象の原因は、どこにあると考えられるか。',
+      focus:
+        '画面に出ている内容が誤っている場合、その値がデータとして誤っているのか、描画のされ方が誤っているのかで分ける。',
+    },
     criteria: {
-      mobile_app:
-        'iOS / Android アプリ本体。画面表示、UI、音声の再生、クラッシュ、設定、位置情報の扱い。',
-      station_api:
-        '駅・路線・列車種別のデータそのもの。駅名の誤り、駅の欠落、路線データや乗換情報の誤り。',
-      functions:
-        'バックエンド。AI チャット、音声合成、フィードバック送信、画像アップロード、API のエラー。',
-      website: '公式サイト（trainlcd.app）。',
-      unknown:
-        'どこに原因があるか、この内容からは絞り込めない。質問や感謝もここに含む。',
+      mobile_app: {
+        what: 'アプリ本体の振る舞い。描画・レイアウト・文字の見切れ・スクロール・テーマ、音声の再生制御、クラッシュ、設定項目、位置情報の追従。',
+        not_for:
+          '表示されている記号・色・名称・停車駅などの値そのものが実際と異なる場合は station_api。',
+        examples: [
+          '文字が見切れる、乗換案内がスクロールしないと読めない',
+          '位置情報が更新されず手前の駅を表示し続ける',
+          'アプリが強制終了する、オートモードが停止する',
+          'アナウンス中に他アプリの音量が下がらない',
+        ],
+      },
+      station_api: {
+        what: '駅・路線・列車種別のデータの値そのもの。駅名、駅ナンバリングの記号、路線カラー、ロゴ、停車駅と通過駅、乗換情報、駅名の多言語表記。',
+        not_for:
+          '値は正しく、表示の崩れやレイアウトが問題である場合は mobile_app。',
+        examples: [
+          'ナンバリングの記号が別の路線のものになっている',
+          '路線のイメージカラーやロゴが実際と異なる',
+          '特急の停車駅・通過駅の設定が実際と異なる',
+          '駅名の英語表記・中国語表記が誤っている',
+        ],
+      },
+      functions: {
+        what: 'サーバ側の処理。読み上げ音声の合成品質やイントネーション、AI チャットの応答、フィードバックの送信、画像のアップロード。',
+        not_for:
+          '音が鳴らない・音量が下がらないといった端末側の再生制御は mobile_app。',
+        examples: [
+          '読み上げのイントネーションが不自然',
+          'AI に質問するとエラーしか返らない',
+        ],
+      },
+      website: {
+        what: '公式サイト（trainlcd.app）そのもの。',
+        not_for:
+          'アプリ内のエラーやクラッシュはサイトとは無関係なので mobile_app。',
+        examples: ['公式サイトのリンクが 404 になる'],
+      },
+      unknown: {
+        what: 'この内容だけでは原因の所在を絞り込めない。',
+        not_for:
+          '内容から所在が読み取れるなら、確信が持てなくても該当する選択肢を選ぶ。',
+        examples: [
+          '使い方の質問',
+          '感謝や称賛のみ',
+          '症状が漠然としていて対象を特定できない',
+        ],
+      },
     },
   },
   severity: {
@@ -178,17 +231,6 @@ const QUESTIONS = {
       '機能は使えるが、表示される内容が誤っている、または余分な操作が必要になる。',
       '特定の機能が使えない、または誤った案内によって利用者が乗車の判断を誤りうる。',
       'アプリが強制終了する、データが失われる、または乗車中にアプリが使い物にならない。',
-    ],
-  },
-  breadth: {
-    type: 'score',
-    instructions:
-      '`feedback` が報告している事象は、どれだけ広い範囲で起きるか。',
-    criteria: [
-      '報告者の特定の操作、または特定の 1 駅・1 列車でのみ起きる。',
-      '特定の路線・列車種別・端末など、限られた条件の利用者に起きる。',
-      '多くの利用者が通る主要な画面や機能で起きる。',
-      'すべての利用者に、常に起きる。',
     ],
   },
   actionability: {
@@ -208,24 +250,27 @@ type QuestionId = keyof typeof QUESTIONS;
 // ---- 合成ロジック（コード側の判断） ----
 
 /**
- * 暫定の閾値。スパイクの目的はこの値を決めるための分布を得ることなので、
- * ここでの一致率は「この閾値ならこうなる」以上の意味を持たない。
+ * 実測（46 件）でフィッティングした閾値。グリッド探索の最良値ではなく、
+ * 分離幅の中央に寄せた丸めた値を使う。最良値は 46 点に対して過学習する。
  */
 const T = {
-  /** これ以上でスパム確定 */
-  SPAM: 0.85,
+  /**
+   * スパム確定の閾値。実測では正当な報告のスパム信号の最大が 0.27、スパムの最小が
+   * 0.75 と大きく開いたため、その中間に置いている。正当な報告を握り潰す方が
+   * スパムを 1 件通すより損失が大きいという方針は現行実装から引き継ぐ。
+   */
+  SPAM: 0.5,
   /** スパム確定には満たないが、人手確認に回す下限 */
-  SPAM_REVIEW: 0.6,
+  SPAM_REVIEW: 0.3,
   /** urgent へのハードルール */
   CRASH: 0.7,
-  /** 加重和から triageLevel を決める境界 */
-  URGENT: 0.7,
-  HIGH: 0.45,
-  MEDIUM: 0.2,
+  /** bug の severity から triageLevel を決める境界 */
+  BUG_URGENT: 2.4,
+  BUG_HIGH: 1.8,
+  BUG_MEDIUM: 0.5,
+  /** 不具合ではない要望を medium に上げる境界 */
+  REQUEST_MEDIUM: 1.0,
 } as const;
-
-/** severity と breadth の重み。actionability は着手順の材料なので優先度に入れない */
-const W = { SEVERITY: 0.6, BREADTH: 0.4 } as const;
 
 type Verdict = {
   isSpam: boolean;
@@ -235,9 +280,7 @@ type Verdict = {
   component: string;
   componentConfidence: number;
   triageLevel: 'urgent' | 'high' | 'medium' | 'low';
-  priorityScore: number;
   severity: number;
-  breadth: number;
   actionability: number;
 };
 
@@ -258,54 +301,67 @@ function score(answers: Record<string, Answer>, id: QuestionId): ScoreAnswer {
 
 function compose(answers: Record<string, Answer>): Verdict {
   const praise = noul(answers, 'is_praise_only');
-  const spamSignal = Math.max(
-    noul(answers, 'is_spam'),
-    noul(answers, 'is_announcement_transcript')
-  );
+  const spamSignal = noul(answers, 'is_spam');
+  const announcement = noul(answers, 'is_announcement_transcript');
 
-  // 感謝は決してスパムにしない（現行 SYSTEM_PROMPT の制約をコード側の条件にした）。
-  const isSpam = praise < 0.5 && spamSignal >= T.SPAM;
+  // 車内放送の書き起こしは「ご利用ありがとうございます」を含むため is_praise_only が
+  // 上がる。放送判定を praise ゲートの外に出さないと、放送がそのまま素通りする。
+  const isSpam =
+    announcement >= T.SPAM || (praise < 0.5 && spamSignal >= T.SPAM);
   const needsSpamReview =
-    !isSpam && praise < 0.5 && spamSignal >= T.SPAM_REVIEW;
+    !isSpam &&
+    praise < 0.5 &&
+    Math.max(spamSignal, announcement) >= T.SPAM_REVIEW;
 
   const cat = choice(answers, 'category');
   const comp = choice(answers, 'component');
   const sev = score(answers, 'severity');
-  const brd = score(answers, 'breadth');
   const act = score(answers, 'actionability');
-
-  const priorityScore =
-    (W.SEVERITY * sev.score) / 3 + (W.BREADTH * brd.score) / 3;
-
-  let triageLevel: Verdict['triageLevel'];
-  if (isSpam) {
-    triageLevel = 'low';
-  } else if (noul(answers, 'is_crash_or_data_loss') >= T.CRASH) {
-    // 加重和では表現できないハードルール。単独で urgent に上げる。
-    triageLevel = 'urgent';
-  } else if (priorityScore >= T.URGENT) {
-    triageLevel = 'urgent';
-  } else if (priorityScore >= T.HIGH) {
-    triageLevel = 'high';
-  } else if (priorityScore >= T.MEDIUM) {
-    triageLevel = 'medium';
-  } else {
-    triageLevel = 'low';
-  }
+  const category = isSpam ? 'question' : cat.choice;
 
   return {
     isSpam,
     needsSpamReview,
-    category: isSpam ? 'question' : cat.choice,
+    category,
     categoryConfidence: cat.confidence,
     component: isSpam ? 'unknown' : comp.choice,
     componentConfidence: comp.choice === 'unknown' ? 0 : comp.confidence,
-    triageLevel,
-    priorityScore,
+    triageLevel: resolveLevel(answers, isSpam, category, sev.score),
     severity: sev.score,
-    breadth: brd.score,
     actionability: act.score,
   };
+}
+
+/**
+ * triageLevel を決める。
+ *
+ * severity は「不具合がどれだけ重いか」の尺度なので、不具合でないものに当てても
+ * 意味を持たない。実測では要望に高い severity が付いて優先度が跳ね上がっていたため、
+ * カテゴリで分岐させ、bug にだけ severity の全域を使う。
+ *
+ * 当初は severity / breadth / actionability の加重和にしていたが、実測で breadth は
+ * 正解レベルと全く相関しなかった（urgent 0.82 / high 0.81 / medium 1.07 / low 1.04）。
+ * 1 通のフィードバックには影響範囲の情報がほとんど含まれていないためで、質問ごと
+ * 削除した。actionability は着手順の材料として残し、優先度には入れない。
+ */
+function resolveLevel(
+  answers: Record<string, Answer>,
+  isSpam: boolean,
+  category: string,
+  severity: number
+): Verdict['triageLevel'] {
+  if (isSpam) return 'low';
+  if (category === 'praise' || category === 'question') return 'low';
+  // 加重和では表現できないハードルール。単独で urgent に上げる。
+  if (noul(answers, 'is_crash_or_data_loss') >= T.CRASH) return 'urgent';
+  if (category === 'bug') {
+    if (severity >= T.BUG_URGENT) return 'urgent';
+    if (severity >= T.BUG_HIGH) return 'high';
+    if (severity >= T.BUG_MEDIUM) return 'medium';
+    return 'low';
+  }
+  // feature_request / improvement は不具合ではないので medium を上限にする
+  return severity >= T.REQUEST_MEDIUM ? 'medium' : 'low';
 }
 
 // ---- 実行 ----
@@ -480,7 +536,7 @@ async function main(): Promise<void> {
         `${mark(mLevel)}${pad(`${v.triageLevel}/${g.triageLevel}`, 16)}`,
         `${mark(mComp)}${pad(`${v.component}/${g.component}`, 26)}`,
         `conf=${v.componentConfidence.toFixed(2)}`,
-        `p=${v.priorityScore.toFixed(2)}(s${v.severity.toFixed(1)}/b${v.breadth.toFixed(1)}/a${v.actionability.toFixed(1)})`,
+        `sev=${v.severity.toFixed(2)} act=${v.actionability.toFixed(2)}`,
         v.needsSpamReview ? 'REVIEW' : '',
       ].join(' ')
     );
