@@ -95,6 +95,35 @@ describe('selectSuggestions', () => {
       '駅4',
     ]);
   });
+
+  // stationsByName は同一物理駅を路線別レコード（別 stationId・同一 groupId）で
+  // 返す。畳まずに確率順で切ると枠が同じ駅で埋まる（実測で「海が見える駅」の
+  // 上位5件が熱海4レコード＋真鶴になった）。
+  describe('同一物理駅は groupId で 1 件に畳む', () => {
+    /** 熱海の路線別 3 レコード（groupId 同じ）＋ 根府川・早川 */
+    const atamiAndOthers: CandidateScore[] = [
+      { station: { ...station(1, '熱海'), stationGroupId: 100 }, fits: 0.9 },
+      { station: { ...station(2, '熱海'), stationGroupId: 100 }, fits: 0.89 },
+      { station: { ...station(3, '熱海'), stationGroupId: 100 }, fits: 0.88 },
+      { station: { ...station(4, '根府川'), stationGroupId: 200 }, fits: 0.8 },
+      { station: { ...station(5, '早川'), stationGroupId: 300 }, fits: 0.7 },
+    ];
+
+    it('枠を同じ駅で埋めず、別の駅に回す', () => {
+      const picked = selectSuggestions(atamiAndOthers, 0, 3);
+      expect(picked.map((s) => s.name)).toEqual(['熱海', '根府川', '早川']);
+    });
+
+    it('残すのは同一グループで最も確率の高いレコード', () => {
+      const picked = selectSuggestions(atamiAndOthers, 0, 1);
+      expect(picked).toEqual([{ ...station(1, '熱海'), stationGroupId: 100 }]);
+    });
+
+    it('畳んだ結果が上限未満なら、その件数で返す', () => {
+      const picked = selectSuggestions(atamiAndOthers.slice(0, 3), 0);
+      expect(picked).toHaveLength(1);
+    });
+  });
 });
 
 describe('buildBatchedRequest', () => {

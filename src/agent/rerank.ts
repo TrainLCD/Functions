@@ -286,8 +286,16 @@ export const judgeCandidates = async (
 };
 
 /**
- * 判定結果から提案駅を選ぶ。確率の降順に並べ、閾値未満を落とし、上限件数で切る。
- * 同じ確率のときは判定に渡した順（＝ツール結果の順）を保つ。
+ * 判定結果から提案駅を選ぶ。確率の降順に並べ、閾値未満を落とし、同一物理駅を
+ * 1 件に畳んでから上限件数で切る。同じ確率のときは判定に渡した順（＝ツール結果の
+ * 順）を保つ。
+ *
+ * `stationGroupId` で畳むのが要点。`stationsByName` は同一物理駅を路線別レコード
+ * （別 stationId・同一 groupId）で返すため、畳まずに確率順で切ると枠が同じ駅で
+ * 埋まる。実測（案 Y）では「海が見える駅」の上位 5 件が熱海の 4 レコードと真鶴に
+ * なり、根府川と早川が押し出された。アプリ側は受け取った提案を groupId で畳む
+ * （`dedupeStationsByGroupId`）ので、そのままでは提案カードが 2 枚に減る。
+ * 実在性検証の `sanitizeSuggestions` は stationId しか見ないため、ここで畳む。
  *
  * threshold は既定値を持たない。計測で決めるまで本番に出せないようにするため。
  */
@@ -295,10 +303,21 @@ export const selectSuggestions = (
   scores: readonly CandidateScore[],
   threshold: number,
   max: number = AGENT_MAX_SUGGESTIONS
-): StationSuggestion[] =>
-  scores
+): StationSuggestion[] => {
+  const ranked = scores
     .map((score, index) => ({ score, index }))
     .filter(({ score }) => score.fits >= threshold)
-    .sort((a, b) => b.score.fits - a.score.fits || a.index - b.index)
-    .slice(0, max)
-    .map(({ score }) => score.station);
+    .sort((a, b) => b.score.fits - a.score.fits || a.index - b.index);
+
+  const seenGroups = new Set<number>();
+  const picked: StationSuggestion[] = [];
+  for (const { score } of ranked) {
+    const { stationGroupId } = score.station;
+    // 同一物理駅は最も確率の高いレコードだけを残す
+    if (seenGroups.has(stationGroupId)) continue;
+    seenGroups.add(stationGroupId);
+    picked.push(score.station);
+    if (picked.length >= max) break;
+  }
+  return picked;
+};
