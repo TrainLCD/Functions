@@ -187,6 +187,13 @@ async function judgeAll(
 ): Promise<ItemResult[]> {
   const results: ItemResult[] = [];
   for (const item of pool) {
+    // 候補 0 件の項目を通すと judgeCandidates は判定せず [] を返し、
+    // picked も [] になるので expectEmpty が無条件で正解になる（閾値を
+    // 変えても結果が変わらない項目が「空配列の正解」を水増しする）。
+    if (item.candidates.length === 0) {
+      console.warn(`${item.id}: 候補が 0 件（スキップ）`);
+      continue;
+    }
     const input: RerankInput = {
       request: item.request,
       currentStationName: item.currentStationName,
@@ -220,6 +227,8 @@ type Grade = {
   emptyOk: boolean | null;
   /** min(expect の確率) − max(reject の確率)。両方あるときのみ */
   sep: number | null;
+  /** プールに無くて分母から除いた expect の数（recall が良く見える分） */
+  excludedExpect: number;
 };
 
 function grade(result: ItemResult, threshold: number): Grade {
@@ -231,14 +240,16 @@ function grade(result: ItemResult, threshold: number): Grade {
   const expected = (item.expect ?? []).filter((n) => poolNames.has(n));
   const rejected = (item.reject ?? []).filter((n) => poolNames.has(n));
 
+  /**
+   * 同名の別レコード（同一物理駅の路線別レコード。例: JR / 小田急 / 京王の「新宿」）
+   * は stationId が別なのでプールに全部残る。先頭 1 件だけを見ると、片方が低く
+   * 片方が高いときに「分離幅は正・違反あり」が同時に出て、質問文を直すべき項目を
+   * 取りこぼす。expect は最小、reject は最大（どちらも最悪側）を取る。
+   */
   const fitsOf = (name: string) =>
-    scores.find((s) => s.station.name === name)?.fits;
-  const expectedFits = expected
-    .map(fitsOf)
-    .filter((v): v is number => v !== undefined);
-  const rejectedFits = rejected
-    .map(fitsOf)
-    .filter((v): v is number => v !== undefined);
+    scores.filter((s) => s.station.name === name).map((s) => s.fits);
+  const expectedFits = expected.flatMap(fitsOf);
+  const rejectedFits = rejected.flatMap(fitsOf);
 
   return {
     recall: {
@@ -251,6 +262,7 @@ function grade(result: ItemResult, threshold: number): Grade {
       expectedFits.length && rejectedFits.length
         ? Math.min(...expectedFits) - Math.max(...rejectedFits)
         : null,
+    excludedExpect: (item.expect ?? []).length - expected.length,
   };
 }
 
@@ -269,6 +281,15 @@ function reportShape(shape: string, results: ItemResult[]): void {
     console.log(
       `${threshold.toFixed(2)}   ${String(hit).padStart(3)}/${String(total).padEnd(3)}      ` +
         `${String(violations).padStart(3)}        ${emptyOk}/${emptyTargets.length}`
+    );
+  }
+
+  // recall の分母が縮んだ分を明示する。--record の警告を見落としても、
+  // 期待した駅がプールに無かったことに気づけるようにする。
+  const excluded = results.reduce((a, r) => a + grade(r, 0).excludedExpect, 0);
+  if (excluded > 0) {
+    console.log(
+      `※ プールに無いため分母から除いた expect: ${excluded} 件（評価セットを直すこと）`
     );
   }
 
@@ -305,6 +326,31 @@ function reportShape(shape: string, results: ItemResult[]): void {
 
 // ---- 実行 ----
 
+/** --limit は有限の非負整数だけ受ける。0 / 未指定は全件 */
+function parseLimit(raw: string | undefined): number {
+  if (raw === undefined) return 0;
+  const limit = Number(raw);
+  if (!Number.isInteger(limit) || limit < 0) {
+    console.error(`--limit は 0 以上の整数のみ。受け取った値: ${raw}`);
+    process.exit(1);
+  }
+  return limit;
+}
+
+/** --shape は x / y のみ。未指定は両方測る */
+function parseShapes(
+  raw: string | undefined,
+  present: boolean
+): readonly ('isolated' | 'batched')[] {
+  if (!present) return ['batched', 'isolated'];
+  if (raw === 'x') return ['isolated'];
+  if (raw === 'y') return ['batched'];
+  console.error(
+    `--shape は x（候補ごと）か y（1 リクエスト集約）のみ。受け取った値: ${raw ?? '(なし)'}`
+  );
+  process.exit(1);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const flag = (name: string) => args.includes(name);
@@ -312,7 +358,10 @@ async function main(): Promise<void> {
     const index = args.indexOf(name);
     return index >= 0 ? args[index + 1] : undefined;
   };
-  const limit = Number(value('--limit') ?? 0);
+  // 引数は有料 API を叩く前に検証する。黙って既定へ倒すと、--limit のタイポ 1 つで
+  // 全項目 × 両案（案 X は項目ごとに最大 MAX_JUDGED_CANDIDATES 並列）が走る。
+  const limit = parseLimit(value('--limit'));
+  const shapes = parseShapes(value('--shape'), flag('--shape'));
 
   if (flag('--record')) {
     await record(limit, value('--out') ?? null);
@@ -337,12 +386,6 @@ async function main(): Promise<void> {
     limit > 0 ? limit : undefined
   );
   const model = resolveModel();
-  const shapes =
-    value('--shape') === 'x'
-      ? (['isolated'] as const)
-      : value('--shape') === 'y'
-        ? (['batched'] as const)
-        : (['batched', 'isolated'] as const);
 
   console.log(`対象 ${pool.length} 項目 / model=${model}`);
   for (const shape of shapes) {
