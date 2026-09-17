@@ -17,6 +17,10 @@ export interface Env {
   // --- Vars（非機密。wrangler.jsonc の vars） ---
   GOOGLE_PLAY_PACKAGE_NAME: string;
   AI_TRIAGE_MODEL: string;
+  /** トリアージ判定に使う TypeSafe の API キー（シークレット） */
+  TYPESAFE_API_KEY: string;
+  /** TypeSafe の System One モデル名。wrangler.jsonc の vars で指定する */
+  TYPESAFE_MODEL: string;
   /**
    * Google Cloud TTS のボイス名（例: ja-JP-Standard-B）。ロケールを含むため
    * 日英で別々に指定する。Standard / Wavenet / Neural2 のみ受け付ける
