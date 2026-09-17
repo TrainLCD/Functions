@@ -321,3 +321,83 @@ export const selectSuggestions = (
   }
   return picked;
 };
+
+/**
+ * 有効化と閾値は `config:remote` の `agent_rerank_threshold` で決める
+ * （キルスイッチ・日次上限と同じ運用感でデプロイなしに切り替えられる）。
+ * 0 より大きく 1 以下の数値のときだけ有効。未設定・不正値は無効（null）。
+ *
+ * 既定値をコードに持たない。実測（2026-09-18・案 Y・20 項目）では 0.70 が
+ * reject 違反 0・recall 17/19・「合う駅なし」4/4 を満たす最小値だったが、
+ * 20 項目に対するグリッド最良値なので、値は KV 側で持って調整する。
+ */
+export const resolveRerankThreshold = (
+  remoteConfig: Record<string, unknown>
+): number | null => {
+  const value = Number(remoteConfig.agent_rerank_threshold);
+  return Number.isFinite(value) && value > 0 && value <= 1 ? value : null;
+};
+
+/** 判定結果を提案駅へ落とすところまでをまとめた関数。null は「判定できなかった」 */
+export type RerankSelector = (
+  input: RerankInput,
+  candidates: readonly StationSuggestion[]
+) => Promise<StationSuggestion[] | null>;
+
+/** 対話ターンから使う形。無効時は呼び出し側が null を渡して分岐を消す */
+export const createRerankSelector = (config: {
+  apiKey: string;
+  model: string;
+  threshold: number;
+  signal?: AbortSignal;
+}): RerankSelector => {
+  return async (input, candidates) => {
+    const scores = await judgeCandidates(input, candidates, {
+      apiKey: config.apiKey,
+      model: config.model,
+      // 実測で案 X（候補ごと）に全指標で勝ち、トークンは 55%、レイテンシは 65% だった
+      shape: 'batched',
+      signal: config.signal,
+    });
+    return scores === null ? null : selectSuggestions(scores, config.threshold);
+  };
+};
+
+/**
+ * 提案してよい駅を対話本体へ伝える system メッセージ本文。
+ *
+ * 判定結果でモデルの出力スキーマを置き換えるのではなく、**本文を書く前に
+ * 提案集合を渡す**形にしてある。こうすると reply が提案集合に条件付けられるので
+ * 本文と提案カードが食い違わず、判定できなかったとき（null）は何も注入せず
+ * 今と同じ挙動（モデルが自分で選ぶ）にフォールバックできる。
+ */
+export const buildRerankNote = (
+  picked: readonly StationSuggestion[]
+): string => {
+  if (picked.length === 0) {
+    return [
+      '# 提案してよい駅',
+      '',
+      'ツール結果を精査したが、ユーザの要望を満たす駅は見つからなかった。',
+      'suggestions は空配列にし、見つからなかったことを正直に伝えるか、',
+      'ユーザが答えられる具体的な確認を 1 つだけ返すこと。',
+      '要望に合わない駅を埋め合わせに提案してはならない。',
+    ].join('\n');
+  }
+  const lines = picked.map((station, index) => {
+    const lines_ = station.lineNames.length
+      ? `（${station.lineNames.join('・')}）`
+      : '';
+    return `${index + 1}. ${station.name}${lines_}`;
+  });
+  return [
+    '# 提案してよい駅（要望に合う順）',
+    '',
+    ...lines,
+    '',
+    'suggestions はこの中からこの順で入れること。ここに無い駅を入れてはならない。',
+    'reply もこの駅について書くこと（ここに無い駅名を本文で挙げない）。',
+    '提案が不要な応答（使い方の質問、確認質問を返す場合）では suggestions を',
+    '空配列にしてよい。',
+  ].join('\n');
+};

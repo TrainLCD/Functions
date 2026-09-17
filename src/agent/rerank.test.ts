@@ -1,11 +1,14 @@
 import {
   buildBatchedRequest,
   buildIsolatedRequests,
+  buildRerankNote,
   type CandidateScore,
+  createRerankSelector,
   judgeCandidates,
   MAX_JUDGED_CANDIDATES,
   questionId,
   type RerankInput,
+  resolveRerankThreshold,
   selectSuggestions,
 } from './rerank';
 import type { StationSuggestion } from './schema';
@@ -398,5 +401,80 @@ describe('judgeCandidates', () => {
     });
 
     expect(fetchMock.mock.calls[0]?.[1].signal).toBe(controller.signal);
+  });
+});
+
+describe('resolveRerankThreshold', () => {
+  // 既定値をコードに持たない。KV に値が入るまでリランクは丸ごと無効
+  it('未設定なら無効', () => {
+    expect(resolveRerankThreshold({})).toBeNull();
+  });
+
+  it('0 より大きく 1 以下の数値だけ受ける', () => {
+    expect(resolveRerankThreshold({ agent_rerank_threshold: 0.7 })).toBe(0.7);
+    expect(resolveRerankThreshold({ agent_rerank_threshold: 1 })).toBe(1);
+    expect(resolveRerankThreshold({ agent_rerank_threshold: 0 })).toBeNull();
+    expect(resolveRerankThreshold({ agent_rerank_threshold: -0.1 })).toBeNull();
+    expect(resolveRerankThreshold({ agent_rerank_threshold: 1.5 })).toBeNull();
+  });
+
+  it('数値でない値・非有限値は無効に倒す', () => {
+    expect(resolveRerankThreshold({ agent_rerank_threshold: 'x' })).toBeNull();
+    expect(resolveRerankThreshold({ agent_rerank_threshold: null })).toBeNull();
+    expect(
+      resolveRerankThreshold({
+        agent_rerank_threshold: Number.POSITIVE_INFINITY,
+      })
+    ).toBeNull();
+  });
+
+  // KV は文字列で入ることがある（wrangler kv key put）
+  it('数値として読める文字列は受ける', () => {
+    expect(resolveRerankThreshold({ agent_rerank_threshold: '0.7' })).toBe(0.7);
+  });
+});
+
+describe('buildRerankNote', () => {
+  it('順序と路線名つきで並べ、集合外を禁じる', () => {
+    const note = buildRerankNote([
+      { ...station(1, '熱海'), lineNames: ['東海道線', '伊東線'] },
+      station(2, '真鶴'),
+    ]);
+    expect(note).toContain('1. 熱海（東海道線・伊東線）');
+    expect(note).toContain('2. 真鶴（テスト線）');
+    expect(note).toContain('ここに無い駅を入れてはならない');
+  });
+
+  it('0 件なら「見つからなかった」と伝えるよう書く', () => {
+    const note = buildRerankNote([]);
+    expect(note).toContain('見つからなかった');
+    expect(note).toContain('空配列');
+    expect(note).toContain('埋め合わせに提案してはならない');
+  });
+});
+
+describe('createRerankSelector', () => {
+  it('判定して閾値で絞った駅を返す', async () => {
+    mockFetch(() => jsonResponse({ answers: noulAnswers([0.9, 0.3]) }));
+    const select = createRerankSelector({
+      apiKey: 'key',
+      model: 'jev-latest',
+      threshold: 0.7,
+    });
+
+    await expect(
+      select(input, [station(1, '熱海'), station(2, '来宮')])
+    ).resolves.toEqual([station(1, '熱海')]);
+  });
+
+  it('判定できなければ null をそのまま返す（呼び出し側がフォールバックする）', async () => {
+    mockFetch(() => jsonResponse({}, 500));
+    const select = createRerankSelector({
+      apiKey: 'key',
+      model: 'jev-latest',
+      threshold: 0.7,
+    });
+
+    await expect(select(input, [station(1, '熱海')])).resolves.toBeNull();
   });
 });
