@@ -18,7 +18,7 @@
  *   TYPESAFE_API_KEY=... npm run typesafe-spike
  *   TYPESAFE_API_KEY=... npm run typesafe-spike -- --limit 3 --json
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseJsonc } from 'jsonc-parser';
 
@@ -316,7 +316,8 @@ type GoldenItem = {
     isSpam: boolean;
     category: string;
     triageLevel: string;
-    component: string | null;
+    /** loadGolden が null を 'unknown' に正規化するため常に string */
+    component: string;
   };
 };
 
@@ -389,6 +390,8 @@ async function main(): Promise<void> {
   const dumpJson = args.includes('--json');
   const limitIdx = args.indexOf('--limit');
   const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) || 0 : 0;
+  const outIdx = args.indexOf('--out');
+  const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
 
   const model = resolveModel();
   const items = loadGolden(limit);
@@ -403,6 +406,10 @@ async function main(): Promise<void> {
   let elapsed = 0;
   const compConfidences: number[] = [];
   const rows: string[] = [];
+  /** 閾値のフィッティングを API 再実行なしで行うための生データ */
+  const records: unknown[] = [];
+  const misses: { field: string; input: string; got: string; want: string }[] =
+    [];
 
   for (const [i, item] of items.entries()) {
     const started = Date.now();
@@ -422,6 +429,46 @@ async function main(): Promise<void> {
     if (mLevel) okLevel++;
     if (mComp) okComp++;
     if (!v.isSpam) compConfidences.push(v.componentConfidence);
+
+    records.push({
+      input: item.input,
+      golden: g,
+      answers: res.answers,
+      verdict: v,
+    });
+    const head = item.input.slice(0, 40).replace(/\n/g, ' ');
+    if (!mSpam) {
+      misses.push({
+        field: 'isSpam',
+        input: head,
+        got: String(v.isSpam),
+        want: String(g.isSpam),
+      });
+    }
+    if (!mCat) {
+      misses.push({
+        field: 'category',
+        input: head,
+        got: v.category,
+        want: g.category,
+      });
+    }
+    if (!mLevel) {
+      misses.push({
+        field: 'triageLevel',
+        input: head,
+        got: v.triageLevel,
+        want: g.triageLevel,
+      });
+    }
+    if (!mComp) {
+      misses.push({
+        field: 'component',
+        input: head,
+        got: v.component,
+        want: g.component,
+      });
+    }
 
     const mark = (ok: boolean) => (ok ? ' ' : '×');
     rows.push(
@@ -471,6 +518,30 @@ async function main(): Promise<void> {
   console.log(
     `PUBLIC_ISSUE_MIN_CONFIDENCE(0.7) 以上: ${over}/${compConfidences.length} 件`
   );
+
+  console.log('\n--- 不一致の内訳 ---');
+  for (const f of ['isSpam', 'category', 'triageLevel', 'component']) {
+    const rows = misses.filter((m) => m.field === f);
+    if (rows.length === 0) continue;
+    console.log(`\n[${f}] ${rows.length} 件`);
+    const pairs = new Map<string, number>();
+    for (const m of rows) {
+      const k = `${m.want} → ${m.got}`;
+      pairs.set(k, (pairs.get(k) ?? 0) + 1);
+      console.log(`  正解=${m.want} 判定=${m.got}  ${m.input}…`);
+    }
+    console.log(
+      `  混同: ${[...pairs.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, c]) => `${k}(${c})`)
+        .join(', ')}`
+    );
+  }
+
+  if (outPath) {
+    writeFileSync(outPath, JSON.stringify(records, null, 2), 'utf8');
+    console.log(`\n生データを ${outPath} に書き出した（閾値の再計算に使う）`);
+  }
 
   console.log('\n--- コスト・レイテンシ ---');
   console.log(`入力 ${inTok} tok / 出力 ${outTok} tok（出力は無課金）`);
