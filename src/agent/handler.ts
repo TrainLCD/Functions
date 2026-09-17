@@ -321,7 +321,7 @@ export interface AgentTurnParams {
 type RerankState = { done: boolean };
 
 /**
- * 提案してよい駅を伝える system メッセージを作る。注入しない場合は null。
+ * 提案してよい駅を伝えるメッセージ本文を作る。注入しない場合は null。
  * 判定できなかったとき（API 障害・レート制限・期限切れ）も null を返し、
  * モデルが自分で選ぶ今の挙動にフォールバックする。
  */
@@ -401,10 +401,14 @@ export const runAgentTurn = async (
       const note = await rerankNote(params, verified, rerankState);
       if (!note) return stepNumber >= MAX_TOOL_ITERATIONS ? tools : undefined;
       // 本文を書く前に提案集合を渡す。reply がこの集合に条件付けられるので、
-      // 本文と提案カードが食い違わない
+      // 本文と提案カードが食い違わない。
+      // ロールは system ではなく user にする。Gemini（Vertex）は会話の途中の
+      // system メッセージを受け付けず、リクエスト組み立て時に
+      // UnsupportedFunctionalityError（system messages are only supported at
+      // the beginning of the conversation）で落ちる
       return {
         ...tools,
-        messages: [...messages, { role: 'system' as const, content: note }],
+        messages: [...messages, { role: 'user' as const, content: note }],
       };
     },
     output: Output.object({ schema: agentOutputSchema }),

@@ -678,22 +678,52 @@ describe('handleAgentChatStream', () => {
  * 「注入されるか / 何回走るか / 失敗したときに今の挙動へ戻るか」だけを見る。
  */
 describe('提案駅のリランクの組み込み', () => {
+  /** 検索を 1 回済ませた時点で prepareStep に渡されるメッセージ列（本番と同じ形） */
+  const messagesAfterSearch: AnyFn[] = [
+    { role: 'user', content: '海が見える駅に行きたい' },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-call',
+          toolCallId: 'call-1',
+          toolName: 'search_stations_by_name',
+          input: { name: '熱海' },
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: 'call-1',
+          toolName: 'search_stations_by_name',
+          output: {
+            type: 'json',
+            value: { stations: [{ id: 1, name: '熱海' }] },
+          },
+        },
+      ],
+    },
+  ];
+
   /**
    * ツールを 1 回実行して verified を埋めたあと prepareStep を呼び、
-   * 注入された system メッセージ（あれば）を返す。
+   * その結果のメッセージ列（上書きしなければ undefined）を返す。
    */
-  const injectedNote = async (
+  const preparedMessages = async (
     rerank: AnyFn | undefined,
     stepNumber = 1
-  ): Promise<string | undefined> => {
-    let injected: string | undefined;
+  ): Promise<AnyFn[] | undefined> => {
+    let injected: AnyFn[] | undefined;
     const streamText: AnyFn = jest.fn(async (options: AnyFn) => {
       await options.tools.search_stations_by_name.execute({ name: '熱海' }, {});
       const prepared = await options.prepareStep({
         stepNumber,
-        messages: [{ role: 'user', content: '海が見える駅に行きたい' }],
+        messages: messagesAfterSearch,
       });
-      injected = prepared?.messages?.at(-1)?.content;
+      injected = prepared?.messages;
       return streamResult({ output: { reply: 'ok', suggestions: [] } });
     });
     await runAgentTurn({
@@ -708,6 +738,18 @@ describe('提案駅のリランクの組み込み', () => {
     return injected;
   };
 
+  const injectedMessage = async (
+    rerank: AnyFn | undefined,
+    stepNumber = 1
+  ): Promise<AnyFn | undefined> =>
+    (await preparedMessages(rerank, stepNumber))?.at(-1);
+
+  const injectedNote = async (
+    rerank: AnyFn | undefined,
+    stepNumber = 1
+  ): Promise<string | undefined> =>
+    (await injectedMessage(rerank, stepNumber))?.content;
+
   it('無効（rerank 未指定）なら何も注入しない', async () => {
     await expect(injectedNote(undefined)).resolves.toBeUndefined();
   });
@@ -719,6 +761,26 @@ describe('提案駅のリランクの組み込み', () => {
     expect(note).toContain('提案してよい駅');
     expect(note).toContain('1. 熱海');
     expect(note).not.toContain('来宮');
+  });
+
+  // Gemini（Vertex）は会話の途中の system メッセージを受け付けず、リクエスト
+  // 組み立ての時点で UnsupportedFunctionalityError になる。注入は user で行う
+  it('注入は user ロールで行う', async () => {
+    const message = await injectedMessage(
+      jest.fn().mockResolvedValue([station(1, '熱海')])
+    );
+    expect(message?.role).toBe('user');
+  });
+
+  // ツール結果より前に置くと、モデルは提案集合を知る前に本文を書き始められる。
+  // 既存のメッセージ列を保ったまま末尾に足すことも併せて見る
+  it('既存のメッセージ列の末尾（ツール結果の後ろ）へ注入する', async () => {
+    const messages = await preparedMessages(
+      jest.fn().mockResolvedValue([station(1, '熱海')])
+    );
+    expect(messages?.slice(0, -1)).toEqual(messagesAfterSearch);
+    expect(messages?.at(-2)?.role).toBe('tool');
+    expect(messages?.at(-1)?.content).toContain('提案してよい駅');
   });
 
   it('要望に合う駅が無ければ、空配列にして正直に伝えるよう注入する', async () => {
