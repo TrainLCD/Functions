@@ -1146,7 +1146,11 @@ async function triageFeedback(
   return {
     aiReport,
     triageFailed,
-    needsSpamReview: needsSpamReview || judgment === null,
+    // TypeSafe 側の「スパム確定ではないが人手確認に回す」判断も引き継ぐ。
+    // resolvePublicIssueRepo はこのフラグで公開リポジトリへの起票を止めるため、
+    // 落とすと確認前のフィードバックが公開リポジトリに出る。
+    needsSpamReview:
+      needsSpamReview || judgment === null || judgment.needsSpamReview,
   };
 }
 

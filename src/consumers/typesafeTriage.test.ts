@@ -133,3 +133,21 @@ describe('component の確信度', () => {
     expect(v.componentConfidence).toBeCloseTo(0.83);
   });
 });
+
+describe('needsSpamReview', () => {
+  it('スパム確定には届かないがスパムらしさが残るときに立てる', () => {
+    const v = compose(answers({ spam: 0.4 }));
+    expect(v.isSpam).toBe(false);
+    expect(v.needsSpamReview).toBe(true);
+  });
+
+  it('スパムらしさが十分低ければ立てない', () => {
+    expect(compose(answers({ spam: 0.1 })).needsSpamReview).toBe(false);
+  });
+
+  it('スパム確定のときは立てない（確認するまでもない）', () => {
+    const v = compose(answers({ spam: 0.9 }));
+    expect(v.isSpam).toBe(true);
+    expect(v.needsSpamReview).toBe(false);
+  });
+});

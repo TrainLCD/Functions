@@ -389,9 +389,12 @@ export async function judgeFeedback(
     // 同じ結果になるため即座に諦める。<https://docs.typesafe.ai/api>
     if (!RETRYABLE_STATUSES.has(res.status)) break;
     const retryAfter = Number(res.headers.get('retry-after'));
-    const waitMs = Number.isFinite(retryAfter)
-      ? retryAfter * 1000
-      : RETRY_BASE_MS * 2 ** attempt;
+    // ヘッダが無いと get() は null を返し、Number(null) は 0。
+    // isFinite(0) は true なので、正値であることまで確かめないと待機しない。
+    const waitMs =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : RETRY_BASE_MS * 2 ** attempt;
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
   throw lastError ?? new Error('TypeSafe API の呼び出しに失敗した');

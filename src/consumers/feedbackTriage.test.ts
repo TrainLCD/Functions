@@ -1063,6 +1063,27 @@ describe('TypeSafe の判定を起票に反映する', () => {
     expect(created[0]?.labels as string[]).toContain('❓ Unknown Type');
   });
 
+  it('スパム確定ではないが確認が必要な判定は、公開リポジトリへ出さない', async () => {
+    // compose は「スパム確定ではないが人手確認に回す」場合に needsSpamReview を立てる。
+    // これを落とすと resolvePublicIssueRepo のガードが素通りし、確認前の
+    // フィードバックが公開リポジトリのスタブ Issue になる。
+    const created = await run(
+      createEnv(),
+      () =>
+        new Response(
+          typesafeBody({
+            // スパム確定（0.5）には届かないが確認下限（0.3）は超える
+            is_spam: noul(0.4),
+            is_praise_only: noul(0.05),
+          }),
+          { status: 200 }
+        )
+    );
+    expect(created[0]?.labels as string[]).toContain('❓ Unknown Type');
+    // 非公開リポジトリへの起票だけで、公開リポジトリへは出ていない
+    expect(created).toHaveLength(1);
+  });
+
   it('スパムと判定されたらタイトルを伏せてスパムラベルを付ける', async () => {
     const created = await run(
       createEnv(),
