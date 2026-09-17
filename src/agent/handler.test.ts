@@ -680,20 +680,20 @@ describe('handleAgentChatStream', () => {
 describe('提案駅のリランクの組み込み', () => {
   /**
    * ツールを 1 回実行して verified を埋めたあと prepareStep を呼び、
-   * 注入された system メッセージ（あれば）を返す。
+   * 注入されたメッセージ（あれば）を返す。
    */
-  const injectedNote = async (
+  const injectedMessage = async (
     rerank: AnyFn | undefined,
     stepNumber = 1
-  ): Promise<string | undefined> => {
-    let injected: string | undefined;
+  ): Promise<{ role?: string; content?: string } | undefined> => {
+    let injected: { role?: string; content?: string } | undefined;
     const streamText: AnyFn = jest.fn(async (options: AnyFn) => {
       await options.tools.search_stations_by_name.execute({ name: '熱海' }, {});
       const prepared = await options.prepareStep({
         stepNumber,
         messages: [{ role: 'user', content: '海が見える駅に行きたい' }],
       });
-      injected = prepared?.messages?.at(-1)?.content;
+      injected = prepared?.messages?.at(-1);
       return streamResult({ output: { reply: 'ok', suggestions: [] } });
     });
     await runAgentTurn({
@@ -708,6 +708,12 @@ describe('提案駅のリランクの組み込み', () => {
     return injected;
   };
 
+  const injectedNote = async (
+    rerank: AnyFn | undefined,
+    stepNumber = 1
+  ): Promise<string | undefined> =>
+    (await injectedMessage(rerank, stepNumber))?.content;
+
   it('無効（rerank 未指定）なら何も注入しない', async () => {
     await expect(injectedNote(undefined)).resolves.toBeUndefined();
   });
@@ -719,6 +725,15 @@ describe('提案駅のリランクの組み込み', () => {
     expect(note).toContain('提案してよい駅');
     expect(note).toContain('1. 熱海');
     expect(note).not.toContain('来宮');
+  });
+
+  // Gemini（Vertex）は会話の途中の system メッセージを受け付けず、リクエスト
+  // 組み立ての時点で UnsupportedFunctionalityError になる。注入は user で行う
+  it('注入は user ロールで行う', async () => {
+    const message = await injectedMessage(
+      jest.fn().mockResolvedValue([station(1, '熱海')])
+    );
+    expect(message?.role).toBe('user');
   });
 
   it('要望に合う駅が無ければ、空配列にして正直に伝えるよう注入する', async () => {
