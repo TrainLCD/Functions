@@ -186,9 +186,25 @@ const requestSystemOne = async (
     }
     return (await res.json()) as SystemOneResult;
   } catch (e) {
-    console.warn('agent rerank: TypeSafe API の呼び出しに失敗した', e);
+    // エラーオブジェクトをそのまま出さない。JSON 破損時の SyntaxError.message は
+    // 応答本文の先頭を含む（例: `Unexpected token 'o', "not json" is not valid JSON`）
+    // ため、!res.ok 側で本文を出さないようにした意図がここで破れる。
+    // 種別（AbortError / TypeError / SyntaxError）だけで運用上は足りる。
+    console.warn(
+      `agent rerank: TypeSafe API の呼び出しに失敗した (${kindOf(e)})`
+    );
     return null;
   }
+};
+
+/**
+ * エラーの種別だけを取り出す。`instanceof Error` は使わない。fetch / Response の
+ * 実装が別 realm の Error を投げると false になり（Jest の node 環境で実際に
+ * SyntaxError が取れず `object` に落ちた）、種別が分からないログになる。
+ */
+const kindOf = (e: unknown): string => {
+  const name = (e as { name?: unknown } | null)?.name;
+  return typeof name === 'string' && name ? name : typeof e;
 };
 
 /** 回答から noul を取り出す。型が合わない・範囲外は null */
@@ -199,8 +215,22 @@ const readNoul = (answer: { type?: string; noul?: number } | undefined) => {
 };
 
 /**
- * 候補を判定する。1 件でも判定できなければその候補を落とし、全滅したら null を
- * 返す（呼び出し側は LLM 側の順序に倒す）。
+ * 候補を判定する。
+ *
+ * **全候補を判定できたときだけ結果を返す。1 件でも判定できなければ null。**
+ * 判定できなかった候補を黙って落とすと、戻り値は「完全な判定結果」として扱われ、
+ * その候補は閾値以上でも提案から確実に除外される。案 X は候補ごとに並列で投げる
+ * ので、レート制限（429）に当たるのがどの候補かは着順で決まり、同じ会話でも
+ * 提案が揺れることになる。再試行しない設計なので回復経路も無い。
+ *
+ * null のときの代償はリランクを丸ごと捨てて LLM 側の順序に倒すことで、これは
+ * 今の本番挙動そのものなので劣化にならない。「落としてよい」のはリランクの結果
+ * 全体であって、個々の候補ではない。
+ *
+ * 戻り値の意味:
+ *   null … 判定できなかった（呼び出し側は LLM 側の順序に倒す）
+ *   []   … 判定した結果、候補が 0 件だった（要望に合う駅が無いとは別。閾値は
+ *          selectSuggestions が当てる）
  */
 export const judgeCandidates = async (
   input: RerankInput,
@@ -211,12 +241,15 @@ export const judgeCandidates = async (
   if (targets.length === 0) return [];
 
   const usage = { inputTokens: 0, outputTokens: 0 };
-  const collect = (result: SystemOneResult | null) => {
-    usage.inputTokens += result?.usage?.input_tokens ?? 0;
-    usage.outputTokens += result?.usage?.output_tokens ?? 0;
+  const collect = (results: readonly (SystemOneResult | null)[]) => {
+    for (const result of results) {
+      usage.inputTokens += result?.usage?.input_tokens ?? 0;
+      usage.outputTokens += result?.usage?.output_tokens ?? 0;
+    }
   };
 
-  const scores: CandidateScore[] = [];
+  /** 候補の添字 → その候補の回答を含む応答。判定できない候補があれば null */
+  let fitsByIndex: (number | null)[];
 
   if (options.shape === 'batched') {
     const { state, questions } = buildBatchedRequest(input, targets);
@@ -224,12 +257,13 @@ export const judgeCandidates = async (
       { state, model: options.model, questions },
       options
     );
-    collect(result);
+    collect([result]);
+    // 使用トークンは null を返す場合でも報告する（計測でコストを取り落とさない）
+    options.onUsage?.(usage);
     if (!result) return null;
-    targets.forEach((station, index) => {
-      const fits = readNoul(result.answers?.[questionId(index)]);
-      if (fits !== null) scores.push({ station, fits });
-    });
+    fitsByIndex = targets.map((_, index) =>
+      readNoul(result.answers?.[questionId(index)])
+    );
   } else {
     const requests = buildIsolatedRequests(input, targets);
     const results = await Promise.all(
@@ -237,16 +271,17 @@ export const judgeCandidates = async (
         requestSystemOne({ state, model: options.model, questions }, options)
       )
     );
-    results.forEach((result, index) => {
-      collect(result);
-      const fits = readNoul(result?.answers?.fits);
-      const station = targets[index];
-      if (fits !== null && station) scores.push({ station, fits });
-    });
-    if (scores.length === 0) return null;
+    collect(results);
+    options.onUsage?.(usage);
+    fitsByIndex = results.map((result) => readNoul(result?.answers?.fits));
   }
 
-  options.onUsage?.(usage);
+  const scores: CandidateScore[] = [];
+  for (const [index, station] of targets.entries()) {
+    const fits = fitsByIndex[index];
+    if (fits === null || fits === undefined) return null;
+    scores.push({ station, fits });
+  }
   return scores;
 };
 

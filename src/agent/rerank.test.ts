@@ -178,10 +178,18 @@ describe('judgeCandidates', () => {
     ]);
   });
 
-  it('案 X は候補ごとにリクエストを出す', async () => {
-    const fetchMock = mockFetch(() =>
-      jsonResponse({ answers: { fits: { type: 'noul', noul: 0.8 } } })
-    );
+  // 候補ごとに違う確率を返させ、送った state.candidate と戻ってきた station の
+  // 対応まで固定する。全候補同じ値だと添字ズレの退行を検出できない。
+  it('案 X は候補ごとにリクエストを出し、応答を送った候補に対応づける', async () => {
+    const byName: Record<string, number> = { A: 0.1, B: 0.5, C: 0.9 };
+    const fetchMock = jest.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string);
+      const name = body.state.candidate.name as string;
+      return jsonResponse({
+        answers: { fits: { type: 'noul', noul: byName[name] } },
+      });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
 
     const scores = await judgeCandidates(
       input,
@@ -190,41 +198,82 @@ describe('judgeCandidates', () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(scores?.map((s) => s.fits)).toEqual([0.8, 0.8, 0.8]);
+    expect(scores).toEqual([
+      { station: station(1, 'A'), fits: 0.1 },
+      { station: station(2, 'B'), fits: 0.5 },
+      { station: station(3, 'C'), fits: 0.9 },
+    ]);
   });
 
-  it('形の合わない回答はその候補だけ落とす', async () => {
-    mockFetch(() =>
-      jsonResponse({
-        answers: {
-          fits_0: { type: 'noul', noul: 0.9 },
-          fits_1: { type: 'choice', choice: 'yes' },
-          fits_2: { type: 'noul', noul: 1.4 },
-        },
-      })
-    );
+  // 判定できなかった候補を黙って落とすと、戻り値が「完全な判定結果」として扱われ、
+  // その候補は閾値以上でも提案から確実に除外される。全候補を判定できたときだけ
+  // 結果を返す。
+  describe('1 件でも判定できなければ null を返す', () => {
+    it('案 Y で一部の回答が型不一致・範囲外', async () => {
+      mockFetch(() =>
+        jsonResponse({
+          answers: {
+            fits_0: { type: 'noul', noul: 0.9 },
+            fits_1: { type: 'choice', choice: 'yes' },
+            fits_2: { type: 'noul', noul: 1.4 },
+          },
+        })
+      );
 
-    const scores = await judgeCandidates(
-      input,
-      [station(1, 'A'), station(2, 'B'), station(3, 'C')],
-      options
-    );
+      await expect(
+        judgeCandidates(
+          input,
+          [station(1, 'A'), station(2, 'B'), station(3, 'C')],
+          options
+        )
+      ).resolves.toBeNull();
+    });
 
-    expect(scores).toEqual([{ station: station(1, 'A'), fits: 0.9 }]);
+    it('案 Y で回答が 1 件も読めない（200 だが answers が空）', async () => {
+      mockFetch(() => jsonResponse({ answers: {} }));
+
+      await expect(
+        judgeCandidates(input, [station(1, 'A'), station(2, 'B')], options)
+      ).resolves.toBeNull();
+    });
+
+    it('案 X で一部のリクエストだけ失敗（429 の着順で提案が揺れないように）', async () => {
+      let call = 0;
+      mockFetch(() => {
+        call += 1;
+        return call === 1
+          ? jsonResponse({}, 429)
+          : jsonResponse({ answers: { fits: { type: 'noul', noul: 0.7 } } });
+      });
+
+      await expect(
+        judgeCandidates(input, [station(1, 'A'), station(2, 'B')], {
+          ...options,
+          shape: 'isolated',
+        })
+      ).resolves.toBeNull();
+    });
   });
 
-  it('判定に渡す候補数には天井がある', async () => {
+  it('判定に渡す候補数には天井があり、送る質問も切り詰め後の数になる', async () => {
     const many = Array.from({ length: MAX_JUDGED_CANDIDATES + 10 }, (_, i) =>
       station(i, `駅${i}`)
     );
-    mockFetch(() =>
+    const fetchMock = jest.fn(async (_url: string, _init: RequestInit) =>
       jsonResponse({
         answers: noulAnswers(Array(MAX_JUDGED_CANDIDATES).fill(0.5)),
       })
     );
+    global.fetch = fetchMock as unknown as typeof fetch;
 
     const scores = await judgeCandidates(input, many, options);
+
     expect(scores).toHaveLength(MAX_JUDGED_CANDIDATES);
+    // 戻り値の長さだけを見ると、切り詰め前の候補で質問を組む退行を見逃す
+    // （モックが 30 問分しか答えないので scores は 30 のまま通ってしまう）
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1].body as string);
+    expect(Object.keys(body.questions)).toHaveLength(MAX_JUDGED_CANDIDATES);
+    expect(body.state.candidates).toHaveLength(MAX_JUDGED_CANDIDATES);
   });
 
   it('使用トークンを onUsage で返す', async () => {
@@ -262,11 +311,19 @@ describe('judgeCandidates', () => {
       ).resolves.toBeNull();
     });
 
-    it('JSON が壊れている', async () => {
-      mockFetch(() => new Response('not json', { status: 200 }));
+    // SyntaxError.message は応答本文の先頭を含む（`Unexpected token 'o',
+    // "SECRET" is not valid JSON`）。エラーをそのまま出すと、!res.ok 側で
+    // 本文を出さないようにした意図がここで破れる。
+    it('JSON が壊れている（本文をログに載せない）', async () => {
+      mockFetch(() => new Response('SENSITIVE-BODY', { status: 200 }));
+
       await expect(
         judgeCandidates(input, [station(1, 'A')], options)
       ).resolves.toBeNull();
+
+      const logged = warn.mock.calls.flat().map(String).join(' ');
+      expect(logged).toContain('SyntaxError');
+      expect(logged).not.toContain('SENSITIVE-BODY');
     });
 
     it('案 X で全候補が失敗した場合', async () => {
@@ -279,22 +336,23 @@ describe('judgeCandidates', () => {
       ).resolves.toBeNull();
     });
 
-    it('案 X で一部だけ失敗した場合は成功分を返す', async () => {
-      let call = 0;
-      mockFetch(() => {
-        call += 1;
-        return call === 1
-          ? jsonResponse({}, 503)
-          : jsonResponse({ answers: { fits: { type: 'noul', noul: 0.7 } } });
-      });
+    // 部分失敗（案 X の一部だけ 429 など）も null。
+    // 「1 件でも判定できなければ null を返す」に集約してある。
 
-      const scores = await judgeCandidates(
-        input,
-        [station(1, 'A'), station(2, 'B')],
-        { ...options, shape: 'isolated' }
+    // 計測でコストを取り落とさないよう、null を返す経路でも使用トークンは報告する
+    it('null を返す場合でも onUsage は呼ぶ', async () => {
+      mockFetch(() =>
+        jsonResponse({ answers: {}, usage: { input_tokens: 90 } })
       );
+      const onUsage = jest.fn();
 
-      expect(scores).toEqual([{ station: station(2, 'B'), fits: 0.7 }]);
+      await expect(
+        judgeCandidates(input, [station(1, 'A')], { ...options, onUsage })
+      ).resolves.toBeNull();
+      expect(onUsage).toHaveBeenCalledWith({
+        inputTokens: 90,
+        outputTokens: 0,
+      });
     });
   });
 
