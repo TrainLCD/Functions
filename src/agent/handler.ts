@@ -27,6 +27,12 @@ import {
 } from './llm';
 import { buildContextMessage, buildSystemPrompt, loadAgentFaq } from './prompt';
 import {
+  buildRerankNote,
+  createRerankSelector,
+  type RerankSelector,
+  resolveRerankThreshold,
+} from './rerank';
+import {
   type AgentChatResult,
   type AgentOutput,
   agentOutputSchema,
@@ -213,7 +219,9 @@ type TurnPhase =
   /** 並列前段のうち FAQ + 現在駅の解決の完了まで */
   | 'context'
   /** 本体 LLM 開始から最初の delta まで */
-  | 'firstDelta';
+  | 'firstDelta'
+  /** 提案駅のリランク判定（ツール結果が出てから 1 回だけ。無効時は出ない） */
+  | 'rerank';
 
 type TurnOutcome = 'done' | 'refused' | 'error';
 
@@ -295,7 +303,47 @@ export interface AgentTurnParams {
   onDelta?: (text: string) => void | Promise<void>;
   /** ツール実行の開始（SSE の tool）。入力内容は会話本文相当のため渡さない */
   onToolStart?: () => void | Promise<void>;
+  /** 現在駅の駅名。リランクの判定材料（「近く」などの相対表現の解釈）に使う */
+  currentStationName?: string | null;
+  /** 提案駅のリランク。無効なら undefined（注入も判定も行わない） */
+  rerank?: RerankSelector;
+  /** リランクの所要時間を記録する（内容は持たない） */
+  onRerankDone?: (elapsedMs: number) => void;
 }
+
+/**
+ * リランクはターンに 1 回だけ実行する。prepareStep はツール実行のたびに走るため、
+ * 都度判定すると最大 3 回ぶんの往復（実測 1 回 364ms）が最初の delta までの
+ * レイテンシに積み上がる。複数回検索するターンでは 2 回目以降に増えた候補が
+ * 判定対象から漏れるが、その駅も `sanitizeSuggestions` は通す（モデルが自分で
+ * 選べば提案できる）ので、提案が減ることはあっても実在しない駅は出ない。
+ */
+type RerankState = { done: boolean };
+
+/**
+ * 提案してよい駅を伝える system メッセージを作る。注入しない場合は null。
+ * 判定できなかったとき（API 障害・レート制限・期限切れ）も null を返し、
+ * モデルが自分で選ぶ今の挙動にフォールバックする。
+ */
+const rerankNote = async (
+  params: AgentTurnParams,
+  verified: ReadonlyMap<number, StationSuggestion>,
+  state: RerankState
+): Promise<string | null> => {
+  if (!params.rerank || state.done || verified.size === 0) return null;
+  state.done = true;
+
+  const request = params.messages[params.messages.length - 1]?.content;
+  if (!request) return null;
+
+  const startedAt = Date.now();
+  const picked = await params.rerank(
+    { request, currentStationName: params.currentStationName ?? null },
+    [...verified.values()]
+  );
+  params.onRerankDone?.(Date.now() - startedAt);
+  return picked === null ? null : buildRerankNote(picked);
+};
 
 /** 構造化出力を取り出せなかったときの救済用に、最終テキストを best effort で読む */
 const readFinalText = async (text: PromiseLike<string>): Promise<string> => {
@@ -318,6 +366,7 @@ export const runAgentTurn = async (
   params: AgentTurnParams
 ): Promise<AgentChatResult> => {
   const verified = new Map<number, StationSuggestion>();
+  const rerankState: RerankState = { done: false };
   const budget = { remaining: MAX_TOOL_CALLS_PER_TURN };
   const openaiReasoning = resolveOpenAIReasoningOptions(params.model);
   const googleReasoning = resolveGoogleReasoningSetting(params.model);
@@ -345,9 +394,19 @@ export const runAgentTurn = async (
       }),
     },
     stopWhen: stepCountIs(MAX_TOOL_ITERATIONS + 1),
-    // イテレーション上限に達したらツールを外し、その時点の結果で応答を生成させる
-    prepareStep: ({ stepNumber }) =>
-      stepNumber >= MAX_TOOL_ITERATIONS ? { activeTools: [] } : undefined,
+    prepareStep: async ({ stepNumber, messages }) => {
+      // イテレーション上限に達したらツールを外し、その時点の結果で応答を生成させる
+      const tools =
+        stepNumber >= MAX_TOOL_ITERATIONS ? { activeTools: [] as [] } : {};
+      const note = await rerankNote(params, verified, rerankState);
+      if (!note) return stepNumber >= MAX_TOOL_ITERATIONS ? tools : undefined;
+      // 本文を書く前に提案集合を渡す。reply がこの集合に条件付けられるので、
+      // 本文と提案カードが食い違わない
+      return {
+        ...tools,
+        messages: [...messages, { role: 'system' as const, content: note }],
+      };
+    },
     output: Output.object({ schema: agentOutputSchema }),
     // 思考（reasoning）の抑制。プロバイダは自分のキーだけを読むため、
     // 使っていない側のキーは無視される（anthropic 使用時に openai は無視、その逆も同様）
@@ -421,6 +480,8 @@ type PreparedTurn =
       currentStation: StationSuggestion | null;
       /** 本体ターン開始時に消費する日次カウンタ（commitDailyTurn に渡す） */
       usage: DailyUsage;
+      /** config:remote の内容（リランクの閾値をここから読む） */
+      remoteConfig: Record<string, unknown>;
     };
 
 /**
@@ -511,7 +572,7 @@ const prepareAgentTurn = async (
 
   const [faq, currentStation] = await contextPromise;
   markPhase(metrics, 'context', parallelStartedAt);
-  return { chatReq, faq, currentStation, usage };
+  return { chatReq, faq, currentStation, usage, remoteConfig };
 };
 
 /** 前段処理の結果から runAgentTurn の引数を組み立てる（両エンドポイントで共通） */
@@ -523,7 +584,9 @@ const buildTurnParams = (
   metrics: TurnMetrics,
   callbacks: Pick<AgentTurnParams, 'onDelta' | 'onToolStart'> = {}
 ): AgentTurnParams => {
-  const { chatReq, faq, currentStation } = prepared;
+  const { chatReq, faq, currentStation, remoteConfig } = prepared;
+  // 閾値が KV に入っていなければリランクは丸ごと無効（既定は無効）
+  const threshold = resolveRerankThreshold(remoteConfig);
   return {
     streamText: runtime.streamText,
     model: resolveAgentModel(env),
@@ -545,6 +608,19 @@ const buildTurnParams = (
     searchStations: (name) =>
       searchStationsByName(env, name, chatReq.currentStationGroupId, signal),
     signal,
+    currentStationName: currentStation?.name ?? null,
+    rerank:
+      threshold !== null && env.TYPESAFE_API_KEY
+        ? createRerankSelector({
+            apiKey: env.TYPESAFE_API_KEY,
+            model: env.TYPESAFE_MODEL,
+            threshold,
+            signal,
+          })
+        : undefined,
+    onRerankDone: (elapsedMs) => {
+      metrics.phases.rerank = elapsedMs;
+    },
     // 計測は内容を一切持たず、最初の delta までの所要時間とツール実行回数だけを数える
     onDelta: async (text) => {
       if (metrics.phases.firstDelta === undefined) {

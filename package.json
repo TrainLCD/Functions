@@ -13,7 +13,8 @@
     "cf-typegen": "wrangler types",
     "find-tts-cache": "tsx src/cli/find-tts-cache.ts",
     "find-orphaned-tts": "tsx src/cli/find-orphaned-tts.ts",
-    "typesafe-spike": "tsx src/cli/typesafe-triage-spike.ts"
+    "typesafe-spike": "tsx src/cli/typesafe-triage-spike.ts",
+    "typesafe-rerank-spike": "tsx src/cli/typesafe-rerank-spike.ts"
   },
   "engines": {
     "node": ">=22"
