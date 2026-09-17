@@ -20,10 +20,26 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parse as parseJsonc } from 'jsonc-parser';
 
 const API_URL = 'https://api.typesafe.ai/v1/systemone';
-const MODEL = 'jev-latest';
 const FEWSHOT_PATH = resolve(process.cwd(), 'fewshot.jsonl');
+
+/**
+ * モデル名は wrangler.jsonc の vars から読む。ここで文字列を持つと、本体を
+ * 切り替えたあと var を変えてもスパイクだけ別のモデルを測り続けることになる。
+ */
+function resolveModel(): string {
+  const cfgPath = resolve(process.cwd(), 'wrangler.jsonc');
+  const cfg = parseJsonc(readFileSync(cfgPath, 'utf8')) as {
+    vars?: Record<string, string>;
+  };
+  const model = cfg.vars?.TYPESAFE_MODEL;
+  if (!model) {
+    throw new Error('wrangler.jsonc の vars に TYPESAFE_MODEL がありません');
+  }
+  return model;
+}
 
 // ---- TypeSafe API の型（docs.typesafe.ai/api） ----
 
@@ -328,6 +344,7 @@ function loadGolden(limit: number): GoldenItem[] {
 
 async function ask(
   apiKey: string,
+  model: string,
   feedback: string
 ): Promise<SystemOneResponse> {
   const res = await fetch(API_URL, {
@@ -340,7 +357,7 @@ async function ask(
       // 本番では report_type / app_version / os / has_stacktrace も名前付きで渡す。
       // fewshot.jsonl には本文しか無いため、ここでは本文のみ。
       state: { feedback },
-      model: MODEL,
+      model,
       questions: QUESTIONS,
     }),
   });
@@ -373,8 +390,9 @@ async function main(): Promise<void> {
   const limitIdx = args.indexOf('--limit');
   const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) || 0 : 0;
 
+  const model = resolveModel();
   const items = loadGolden(limit);
-  console.log(`対象 ${items.length} 件 / model=${MODEL}\n`);
+  console.log(`対象 ${items.length} 件 / model=${model}\n`);
 
   let okSpam = 0;
   let okCat = 0;
@@ -388,7 +406,7 @@ async function main(): Promise<void> {
 
   for (const [i, item] of items.entries()) {
     const started = Date.now();
-    const res = await ask(apiKey, item.input);
+    const res = await ask(apiKey, model, item.input);
     elapsed += Date.now() - started;
     inTok += res.usage.input_tokens;
     outTok += res.usage.output_tokens;
