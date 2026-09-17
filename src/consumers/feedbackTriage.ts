@@ -13,6 +13,7 @@ import type {
 import type { DiscordEmbed } from '../models/common';
 import type { Report } from '../models/feedback';
 import type { Env, FeedbackQueueMessage } from '../types';
+import { judgeFeedback, type Verdict } from './typesafeTriage';
 
 /** フィードバック原本を保管する非公開リポジトリ */
 const INTERNAL_REPO = 'TrainLCD/Issues';
@@ -31,6 +32,21 @@ const COMPONENT_REPOS: Record<AIComponent, string> = {
 
 /** 原因コンポーネントを信用して公開リポジトリに起票する最低信頼度 */
 export const PUBLIC_ISSUE_MIN_CONFIDENCE = 0.7;
+
+/** TypeSafe の判定取得を諦めるまでの試行回数 */
+const MAX_JUDGE_ATTEMPTS = 3;
+
+/** カテゴリと原因コンポーネントから GitHub のラベル名以外の分類ラベルを導く */
+export function deriveLabels(judgment: Verdict): string[] {
+  if (judgment.isSpam) return [];
+  const labels: string[] = [];
+  if (judgment.category === 'bug') labels.push('bug');
+  if (judgment.category === 'improvement') labels.push('improvement');
+  if (judgment.category === 'feature_request') labels.push('feature');
+  if (judgment.component === 'station_api') labels.push('location');
+  if (judgment.component === 'functions') labels.push('network');
+  return labels;
+}
 
 /** 公開リポジトリへ転記する対象カテゴリ（質問は原因特定の対象外） */
 const PUBLIC_ISSUE_CATEGORIES: readonly AICategory[] = [
@@ -479,44 +495,21 @@ export function applySpamHeuristic(
 }
 
 const SYSTEM_PROMPT = `
-You are a precise issue triager for TrainLCD.
+You are a precise issue summarizer for TrainLCD.
+
 Task:
 1. Summarize the user's message into a ONE-LINE issue title in Japanese (≤72 chars).
 2. Also create a 1–3 sentence summary in Japanese that concisely describes the feedback content.
-3. Classify spam.
-4. If NOT spam, pick ONE primary "category" from ["bug","feature_request","improvement","question","praise"]:
-   - bug: 不具合・誤動作・クラッシュ・表示崩れ
-   - feature_request: まだ存在しない機能の新規要望
-   - improvement: 既存機能の改善・調整
-   - question: 質問・使い方の確認・情報要求
-   - praise: 感謝・称賛・応援のみで、対応すべき要望を含まないもの
-5. If NOT spam, pick ONE "triageLevel" from ["urgent","high","medium","low"]:
-   - urgent: クラッシュ・データ消失・広範な実用不能
-   - high: 特定機能が使えない／重要機能要望
-   - medium: 通常の改善・軽微なバグ
-   - low: 体裁の問題・質問・軽い要望・感謝や称賛
-   If spam, still output "category": "question" and "triageLevel": "low" (they are ignored for spam).
-6. If NOT spam, decide WHICH component the root cause most likely lives in, as "component":
-   - "mobile_app": TrainLCD の iOS/Android アプリ本体（画面表示・UI・音声再生・クラッシュ・設定・位置情報の挙動）
-   - "station_api": 駅・路線・種別のデータや検索結果（駅名の誤り・駅の欠落・路線データの誤り）
-   - "functions": バックエンド Workers（AIチャット・音声合成・フィードバック送信・画像アップロード・API エラー）
-   - "website": 公式サイト（trainlcd.app）
-   Use "unknown" when the message does not clearly point at one component.
-   Also output "componentConfidence" (0..1) for how sure you are about "component".
-   Use a value below 0.7 unless the message clearly identifies the responsible component.
-   If spam, output "component": "unknown". Always output "componentConfidence" (0 when "unknown").
 
 Rules:
 - Newspaper-style headline: [症状/論点]+[対象]（助詞は最小限）
 - No device/OS/version/URL/stack unless essential
 - Prefer Japanese if input has Japanese
-- Mark spam ONLY for content unrelated to improving the app: 車内放送の書き起こし、無関係な雑談、宣伝・荒らし
-- NEVER mark gratitude, praise or encouragement as spam. Even with nothing to fix, it is a real message from a real user: set isSpam=false and category="praise"
-- If not spam, pick labels from:
-  ["bug","improvement","feature","localization","location","ui","performance","network","settings"]
+- Summarize whatever the message says, even if it looks like spam, an announcement
+  transcript or gibberish. Classification is decided elsewhere; do not refuse.
 
 Output JSON only:
-{"title": "...", "summary": "...", "isSpam": true|false, "labels": [], "category": "...", "triageLevel": "...", "component": "...", "componentConfidence": 0..1, "confidence": 0..1, "reason": "..."}
+{"title": "...", "summary": "..."}
 
 Return ONLY that JSON. No prose, no markdown.
 `.trim();
@@ -530,35 +523,10 @@ const TRIAGE_JSON_SCHEMA = {
   properties: {
     title: { type: 'string' },
     summary: { type: 'string' },
-    isSpam: { type: 'boolean' },
-    labels: { type: 'array', items: { type: 'string' } },
-    category: {
-      type: 'string',
-      enum: ['bug', 'feature_request', 'improvement', 'question', 'praise'],
-    },
-    triageLevel: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'] },
-    component: {
-      type: 'string',
-      enum: ['mobile_app', 'station_api', 'functions', 'website', 'unknown'],
-    },
-    componentConfidence: { type: 'number', minimum: 0, maximum: 1 },
-    confidence: { type: 'number', minimum: 0, maximum: 1 },
-    reason: { type: 'string' },
   },
-  // category / triageLevel を optional にしていたため、モデルが省略した非スパムの
-  // レポートが軒並み既定値（question / medium）に落ちていた。常に出力させる。
-  required: [
-    'title',
-    'summary',
-    'isSpam',
-    'labels',
-    'category',
-    'triageLevel',
-    'component',
-    'componentConfidence',
-    'confidence',
-    'reason',
-  ],
+  // 判定は TypeSafe が担当するため、モデルに出させるのはこの 2 つだけ。
+  // いずれも required にして、フィールド欠落で要約が空になるのを構造的に防ぐ。
+  required: ['title', 'summary'],
 } as const;
 
 // ---- Few-shot loader（CONFIG_KV） ----
@@ -591,10 +559,31 @@ async function loadFewShot(env: Env): Promise<string | null> {
     .map(({ it }) => it);
 
   const blocks = shuffled.map((it) => {
-    const block = `Input:\n${String(it.input)}\nOutput:\n${String(it.output)}`;
+    const block = `Input:\n${String(it.input)}\nOutput:\n${projectExample(it.output)}`;
     return block.length > perExMax ? `${block.slice(0, perExMax - 1)}…` : block;
   });
   return blocks.join('\n\n');
+}
+
+/**
+ * few-shot の output を、モデルに出させるフィールドだけに絞る。
+ *
+ * KV に置く few-shot は判定（category / component など）も含んだ完全な形で保つ。
+ * トリアージの正解データとして計測（src/cli/typesafe-triage-spike.ts）にも使うため。
+ * 一方、Workers AI に担当させるのはタイトルと要約だけなので、例にだけ余分な
+ * フィールドがあるとモデルがそれを真似て出力し、スキーマと食い違う。
+ */
+export function projectExample(output: string): string {
+  try {
+    const o = JSON.parse(output);
+    return JSON.stringify({
+      title: String(o?.title ?? ''),
+      summary: String(o?.summary ?? ''),
+    });
+  } catch {
+    // 壊れた例はそのまま渡す（従来どおり、モデル側で無視されることを期待する）
+    return output;
+  }
 }
 
 async function getFewShotText(env: Env): Promise<string> {
@@ -1092,6 +1081,56 @@ async function triageFeedback(
     }
   }
 
+  // 判定は TypeSafe が担当する。タイトル・要約の生成とは独立なので、失敗しても
+  // 生成結果は捨てない。取得できなかった場合は、原因を絞り込めなかった扱いに倒す
+  // （componentConfidence 0 なので公開リポジトリへの起票は行われない）。
+  let judgment: Verdict | null = null;
+  for (let attempt = 1; attempt <= MAX_JUDGE_ATTEMPTS; attempt++) {
+    try {
+      judgment = await judgeFeedback(env, report);
+      break;
+    } catch (err) {
+      console.warn('feedbackTriage: TypeSafe の判定取得に失敗（再試行）', {
+        reportId: report.id,
+        attempt,
+        maxAttempts: MAX_JUDGE_ATTEMPTS,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (judgment) {
+    aiReport = {
+      ...aiReport,
+      isSpam: judgment.isSpam,
+      category: judgment.category as AICategory,
+      triageLevel: judgment.triageLevel,
+      component:
+        judgment.component === 'unknown'
+          ? null
+          : (judgment.component as AIComponent),
+      componentConfidence: judgment.componentConfidence,
+      confidence: judgment.categoryConfidence,
+      labels: deriveLabels(judgment),
+      reason: `${judgment.category} / ${judgment.triageLevel}`,
+    };
+    if (judgment.isSpam) {
+      aiReport = { ...aiReport, title: NON_ACTIONABLE_TITLE, labels: [] };
+    }
+  } else {
+    console.error(
+      'feedbackTriage: TypeSafe の判定を取得できなかった。分類なしで起票する',
+      { reportId: report.id }
+    );
+    aiReport = {
+      ...aiReport,
+      component: null,
+      componentConfidence: 0,
+      confidence: 0,
+      reason: 'judgment-unavailable',
+    };
+  }
+
   const spamDecision = applySpamHeuristic(aiReport, report.description, {
     triageFailed,
   });
@@ -1104,7 +1143,15 @@ async function triageFeedback(
     );
   }
 
-  return { aiReport, triageFailed, needsSpamReview };
+  return {
+    aiReport,
+    triageFailed,
+    // TypeSafe 側の「スパム確定ではないが人手確認に回す」判断も引き継ぐ。
+    // resolvePublicIssueRepo はこのフラグで公開リポジトリへの起票を止めるため、
+    // 落とすと確認前のフィードバックが公開リポジトリに出る。
+    needsSpamReview:
+      needsSpamReview || judgment === null || judgment.needsSpamReview,
+  };
 }
 
 // ---- Discord 通知 ----
