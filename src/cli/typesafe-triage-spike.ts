@@ -83,30 +83,45 @@ function loadGolden(limit: number): GoldenItem[] {
   return limit > 0 ? items.slice(0, limit) : items;
 }
 
+/** 時間を置けば通る可能性があるステータス（レート制限と過負荷） */
+const RETRYABLE_STATUSES = new Set([429, 529]);
+
 async function ask(
   apiKey: string,
   model: string,
   feedback: string
 ): Promise<SystemOneResponse> {
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      // 本番では report_type / app_version / os / has_stacktrace も名前付きで渡す。
-      // fewshot.jsonl には本文しか無いため、ここでは本文のみ。
-      state: { feedback },
-      model,
-      questions: QUESTIONS,
-    }),
+  const body = JSON.stringify({
+    // 本番では report_type / app_version / os / has_stacktrace も名前付きで渡す。
+    // fewshot.jsonl には本文しか無いため、ここでは本文のみ。
+    state: { feedback },
+    model,
+    questions: QUESTIONS,
   });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`TypeSafe API ${res.status}: ${body.slice(0, 500)}`);
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body,
+    });
+    if (res.ok) return (await res.json()) as SystemOneResponse;
+    const text = await res.text().catch(() => '');
+    lastError = new Error(`TypeSafe API ${res.status}: ${text.slice(0, 500)}`);
+    // 逐次実行なので、後半で落ちるとそこまでの計測が無駄になる。
+    // 429 と 529 は時間を置けば通る。<https://docs.typesafe.ai/api>
+    if (!RETRYABLE_STATUSES.has(res.status)) break;
+    const retryAfter = Number(res.headers.get('retry-after'));
+    const waitMs = Number.isFinite(retryAfter)
+      ? retryAfter * 1000
+      : 500 * 2 ** attempt;
+    console.warn(`  ${res.status} のため ${waitMs}ms 待って再試行する`);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
-  return (await res.json()) as SystemOneResponse;
+  throw lastError ?? new Error('TypeSafe API の呼び出しに失敗した');
 }
 
 function pad(s: string, n: number): string {
@@ -129,9 +144,22 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const dumpJson = args.includes('--json');
   const limitIdx = args.indexOf('--limit');
-  const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) || 0 : 0;
+  const rawLimit = limitIdx >= 0 ? args[limitIdx + 1] : undefined;
+  const limit = rawLimit === undefined ? 0 : Number(rawLimit);
+  if (limitIdx >= 0 && (!Number.isInteger(limit) || limit <= 0)) {
+    // Number('foo') も Number(undefined) も 0 になり、loadGolden(0) は全件を返す。
+    // 件数を絞ったつもりで全件分の API を呼ぶことになるため、ここで落とす。
+    console.error('--limit には正の整数を指定すること');
+    process.exit(1);
+  }
   const outIdx = args.indexOf('--out');
   const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
+  if (outIdx >= 0 && (!outPath || outPath.startsWith('--'))) {
+    // 値が無いと --out が黙って無視され、`--out --json` は `--json` という名前の
+    // ファイルを作ってしまう。API を呼ぶ前に落とす。
+    console.error('--out には書き出し先のパスを指定すること');
+    process.exit(1);
+  }
 
   const model = resolveModel();
   const items = loadGolden(limit);
@@ -176,6 +204,10 @@ async function main(): Promise<void> {
       answers: res.answers,
       verdict: v,
     });
+    // 1 件ごとに書き出す。逐次実行なので、後半で失敗したときに
+    // それまでの計測（API を叩いて得た高価なデータ）を失わないようにする。
+    if (outPath)
+      writeFileSync(outPath, JSON.stringify(records, null, 2), 'utf8');
     const head = item.input.slice(0, 40).replace(/\n/g, ' ');
     if (!mSpam) {
       misses.push({
@@ -279,7 +311,6 @@ async function main(): Promise<void> {
   }
 
   if (outPath) {
-    writeFileSync(outPath, JSON.stringify(records, null, 2), 'utf8');
     console.log(`\n生データを ${outPath} に書き出した（閾値の再計算に使う）`);
   }
 

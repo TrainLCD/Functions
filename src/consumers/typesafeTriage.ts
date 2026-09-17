@@ -13,6 +13,11 @@ import type { Env } from '../types';
 
 const API_URL = 'https://api.typesafe.ai/v1/systemone';
 
+/** 時間を置けば通る可能性があるステータス（レート制限と過負荷） */
+const RETRYABLE_STATUSES = new Set([429, 529]);
+const RETRYABLE_ATTEMPTS = 3;
+const RETRY_BASE_MS = 250;
+
 /**
  * instructions と criteria は文字列のほか、構造化オブジェクト・配列も取れる
  * （<https://docs.typesafe.ai/api>）。選択肢が紛らわしいときに what / not_for /
@@ -358,22 +363,36 @@ export async function judgeFeedback(
   env: Env,
   report: Report
 ): Promise<Verdict> {
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.TYPESAFE_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      state: buildState(report),
-      model: env.TYPESAFE_MODEL,
-      questions: QUESTIONS,
-    }),
+  const body = JSON.stringify({
+    state: buildState(report),
+    model: env.TYPESAFE_MODEL,
+    questions: QUESTIONS,
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`TypeSafe API ${res.status}: ${body.slice(0, 300)}`);
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < RETRYABLE_ATTEMPTS; attempt++) {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.TYPESAFE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body,
+    });
+    if (res.ok) {
+      const json = (await res.json()) as SystemOneResponse;
+      return compose(json.answers);
+    }
+    const text = await res.text().catch(() => '');
+    lastError = new Error(`TypeSafe API ${res.status}: ${text.slice(0, 300)}`);
+    // 429（レート制限）と 529（過負荷）は時間を置けば通る。それ以外は再試行しても
+    // 同じ結果になるため即座に諦める。<https://docs.typesafe.ai/api>
+    if (!RETRYABLE_STATUSES.has(res.status)) break;
+    const retryAfter = Number(res.headers.get('retry-after'));
+    const waitMs = Number.isFinite(retryAfter)
+      ? retryAfter * 1000
+      : RETRY_BASE_MS * 2 ** attempt;
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
-  const json = (await res.json()) as SystemOneResponse;
-  return compose(json.answers);
+  throw lastError ?? new Error('TypeSafe API の呼び出しに失敗した');
 }
