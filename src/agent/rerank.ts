@@ -334,7 +334,13 @@ export const selectSuggestions = (
 export const resolveRerankThreshold = (
   remoteConfig: Record<string, unknown>
 ): number | null => {
-  const value = Number(remoteConfig.agent_rerank_threshold);
+  const raw = remoteConfig.agent_rerank_threshold;
+  // 数値・数値形式の文字列だけを通す。Number() に直接かけると
+  // `true` が 1（＝ほぼ全部の候補を棄却する閾値）として有効になり、
+  // 「とりあえず true にして有効化する」という書き方で提案が消える。
+  // 配列（`[0.7]` → 0.7）も同様に通ってしまう。
+  if (typeof raw !== 'number' && typeof raw !== 'string') return null;
+  const value = Number(raw);
   return Number.isFinite(value) && value > 0 && value <= 1 ? value : null;
 };
 

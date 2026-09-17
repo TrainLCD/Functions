@@ -428,6 +428,22 @@ describe('resolveRerankThreshold', () => {
     ).toBeNull();
   });
 
+  // Number() に直接かけると true が 1（ほぼ全部の候補を棄却する閾値）になり、
+  // 「とりあえず true で有効化」という書き方で提案が静かに消える。
+  // 配列も Number([0.7]) === 0.7 で通ってしまう。
+  it('真偽値・配列・オブジェクトは無効に倒す', () => {
+    expect(resolveRerankThreshold({ agent_rerank_threshold: true })).toBeNull();
+    expect(
+      resolveRerankThreshold({ agent_rerank_threshold: false })
+    ).toBeNull();
+    expect(
+      resolveRerankThreshold({ agent_rerank_threshold: [0.7] })
+    ).toBeNull();
+    expect(
+      resolveRerankThreshold({ agent_rerank_threshold: { value: 0.7 } })
+    ).toBeNull();
+  });
+
   // KV は文字列で入ることがある（wrangler kv key put）
   it('数値として読める文字列は受ける', () => {
     expect(resolveRerankThreshold({ agent_rerank_threshold: '0.7' })).toBe(0.7);
