@@ -55,6 +55,12 @@
     // 旧 @cf/meta/llama-3.1-8b-instruct-fast は日本語が破綻するうえ、
     // Workers AI のカタログからも消えている（models list / schema に無い）。
     "AI_TRIAGE_MODEL": "@cf/google/gemma-4-26b-a4b-it",
+    // トリアージの判定（スパム・カテゴリ・優先度・原因コンポーネント）を担う
+    // TypeSafe の System One モデル。生成は担当せず、タイトルと要約は
+    // AI_TRIAGE_MODEL のまま。confidence の閾値を特定バージョンに合わせて
+    // 調整したら、エイリアスではなく "jev-1.13.0" のようにバージョンを固定する
+    // （エイリアスは新リリースで指す先が動くため）。
+    "TYPESAFE_MODEL": "jev-latest",
     // --- TTS（/tts）---
     // Google Cloud TTS。ボイス名はロケール込みで、日英それぞれに指定する。
     // 既定は旧 Google TTS 実装（Firebase Functions 時代）と同じ組み合わせ。
@@ -132,6 +138,8 @@
         "GOOGLE_PLAY_PACKAGE_NAME": "me.tinykitten.trainlcd",
         // dev と同じ理由で大型モデルを使う（日本語タイトルの破損対策）
         "AI_TRIAGE_MODEL": "@cf/google/gemma-4-26b-a4b-it",
+        // dev と同じ。閾値を調整したらバージョンを固定する
+        "TYPESAFE_MODEL": "jev-latest",
         // --- TTS（/tts）---
         // Google Cloud TTS。速度はアプリのアナウンス速度設定（既定「普通」）に
         // 合わせた等速。dev と本番で差を付けると開発時の体感が本番と食い違う

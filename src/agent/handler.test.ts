@@ -672,3 +672,189 @@ describe('handleAgentChatStream', () => {
     expect((classifyTopic as AnyFn).mock.calls[0][2].aborted).toBe(true);
   });
 });
+
+/**
+ * リランクの組み込み。判定そのものは rerank.test.ts が見るので、ここでは
+ * 「注入されるか / 何回走るか / 失敗したときに今の挙動へ戻るか」だけを見る。
+ */
+describe('提案駅のリランクの組み込み', () => {
+  /** 検索を 1 回済ませた時点で prepareStep に渡されるメッセージ列（本番と同じ形） */
+  const messagesAfterSearch: AnyFn[] = [
+    { role: 'user', content: '海が見える駅に行きたい' },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-call',
+          toolCallId: 'call-1',
+          toolName: 'search_stations_by_name',
+          input: { name: '熱海' },
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: 'call-1',
+          toolName: 'search_stations_by_name',
+          output: {
+            type: 'json',
+            value: { stations: [{ id: 1, name: '熱海' }] },
+          },
+        },
+      ],
+    },
+  ];
+
+  /**
+   * ツールを 1 回実行して verified を埋めたあと prepareStep を呼び、
+   * その結果のメッセージ列（上書きしなければ undefined）を返す。
+   */
+  const preparedMessages = async (
+    rerank: AnyFn | undefined,
+    stepNumber = 1
+  ): Promise<AnyFn[] | undefined> => {
+    let injected: AnyFn[] | undefined;
+    const streamText: AnyFn = jest.fn(async (options: AnyFn) => {
+      await options.tools.search_stations_by_name.execute({ name: '熱海' }, {});
+      const prepared = await options.prepareStep({
+        stepNumber,
+        messages: messagesAfterSearch,
+      });
+      injected = prepared?.messages;
+      return streamResult({ output: { reply: 'ok', suggestions: [] } });
+    });
+    await runAgentTurn({
+      ...baseParams,
+      streamText,
+      searchStations: jest
+        .fn()
+        .mockResolvedValue([station(1, '熱海'), station(2, '来宮')]),
+      currentStationName: '東京',
+      rerank: rerank as AnyFn,
+    });
+    return injected;
+  };
+
+  const injectedMessage = async (
+    rerank: AnyFn | undefined,
+    stepNumber = 1
+  ): Promise<AnyFn | undefined> =>
+    (await preparedMessages(rerank, stepNumber))?.at(-1);
+
+  const injectedNote = async (
+    rerank: AnyFn | undefined,
+    stepNumber = 1
+  ): Promise<string | undefined> =>
+    (await injectedMessage(rerank, stepNumber))?.content;
+
+  it('無効（rerank 未指定）なら何も注入しない', async () => {
+    await expect(injectedNote(undefined)).resolves.toBeUndefined();
+  });
+
+  it('選ばれた駅を順序付きで注入する', async () => {
+    const note = await injectedNote(
+      jest.fn().mockResolvedValue([station(1, '熱海')])
+    );
+    expect(note).toContain('提案してよい駅');
+    expect(note).toContain('1. 熱海');
+    expect(note).not.toContain('来宮');
+  });
+
+  // Gemini（Vertex）は会話の途中の system メッセージを受け付けず、リクエスト
+  // 組み立ての時点で UnsupportedFunctionalityError になる。注入は user で行う
+  it('注入は user ロールで行う', async () => {
+    const message = await injectedMessage(
+      jest.fn().mockResolvedValue([station(1, '熱海')])
+    );
+    expect(message?.role).toBe('user');
+  });
+
+  // ツール結果より前に置くと、モデルは提案集合を知る前に本文を書き始められる。
+  // 既存のメッセージ列を保ったまま末尾に足すことも併せて見る
+  it('既存のメッセージ列の末尾（ツール結果の後ろ）へ注入する', async () => {
+    const messages = await preparedMessages(
+      jest.fn().mockResolvedValue([station(1, '熱海')])
+    );
+    expect(messages?.slice(0, -1)).toEqual(messagesAfterSearch);
+    expect(messages?.at(-2)?.role).toBe('tool');
+    expect(messages?.at(-1)?.content).toContain('提案してよい駅');
+  });
+
+  it('要望に合う駅が無ければ、空配列にして正直に伝えるよう注入する', async () => {
+    const note = await injectedNote(jest.fn().mockResolvedValue([]));
+    expect(note).toContain('見つからなかった');
+    expect(note).toContain('空配列');
+  });
+
+  // 判定できなかったときに注入すると、モデルは提案を全部失う。今の挙動
+  // （モデルが自分で選ぶ）へ戻すのがフォールバック
+  it('判定できなかった（null）ときは何も注入しない', async () => {
+    await expect(
+      injectedNote(jest.fn().mockResolvedValue(null))
+    ).resolves.toBeUndefined();
+  });
+
+  it('判定材料として直近のユーザ発話と現在駅を渡す', async () => {
+    const rerank = jest.fn().mockResolvedValue([station(1, '熱海')]);
+    await injectedNote(rerank);
+    expect(rerank).toHaveBeenCalledWith(
+      { request: '海が見える駅に行きたい', currentStationName: '東京' },
+      [station(1, '熱海'), station(2, '来宮')]
+    );
+  });
+
+  // prepareStep はツール実行のたびに走る。都度判定すると最大 3 回ぶんの往復が
+  // 最初の delta までのレイテンシに積み上がる
+  it('prepareStep が何度呼ばれてもターンに 1 回だけ判定する', async () => {
+    const rerank = jest.fn().mockResolvedValue([station(1, '熱海')]);
+    const streamText: AnyFn = jest.fn(async (options: AnyFn) => {
+      await options.tools.search_stations_by_name.execute({ name: '熱海' }, {});
+      for (const stepNumber of [1, 2, 3]) {
+        await options.prepareStep({ stepNumber, messages: [] });
+      }
+      return streamResult({ output: { reply: 'ok', suggestions: [] } });
+    });
+    await runAgentTurn({
+      ...baseParams,
+      streamText,
+      searchStations: jest.fn().mockResolvedValue([station(1, '熱海')]),
+      rerank: rerank as AnyFn,
+    });
+    expect(rerank).toHaveBeenCalledTimes(1);
+  });
+
+  it('ツール結果が無ければ判定しない（使い方の質問など）', async () => {
+    const rerank = jest.fn();
+    const streamText: AnyFn = jest.fn(async (options: AnyFn) => {
+      await options.prepareStep({ stepNumber: 1, messages: [] });
+      return streamResult({ output: { reply: 'ok', suggestions: [] } });
+    });
+    await runAgentTurn({
+      ...baseParams,
+      streamText,
+      searchStations: jest.fn(),
+      rerank: rerank as AnyFn,
+    });
+    expect(rerank).not.toHaveBeenCalled();
+  });
+
+  it('イテレーション上限では注入の有無に関わらずツールを外す', async () => {
+    let prepared: AnyFn;
+    const streamText: AnyFn = jest.fn(async (options: AnyFn) => {
+      await options.tools.search_stations_by_name.execute({ name: '熱海' }, {});
+      prepared = await options.prepareStep({ stepNumber: 3, messages: [] });
+      return streamResult({ output: { reply: 'ok', suggestions: [] } });
+    });
+    await runAgentTurn({
+      ...baseParams,
+      streamText,
+      searchStations: jest.fn().mockResolvedValue([station(1, '熱海')]),
+      rerank: jest.fn().mockResolvedValue([station(1, '熱海')]) as AnyFn,
+    });
+    expect(prepared.activeTools).toEqual([]);
+    expect(prepared.messages.at(-1).content).toContain('提案してよい駅');
+  });
+});

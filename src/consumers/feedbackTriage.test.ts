@@ -917,3 +917,186 @@ describe('processFeedbackMessage（再試行時の冪等化）', () => {
     expect(store.has(triageMarkerKey(msg.report.id))).toBe(false);
   });
 });
+
+describe('TypeSafe の判定を起票に反映する', () => {
+  const ISSUES_API = 'https://api.github.com/repos/TrainLCD/Issues/issues';
+  const TYPESAFE_API = 'https://api.typesafe.ai/v1/systemone';
+
+  const report: Report = {
+    id: 'ts-report',
+    reportType: 'feedback',
+    description: '特急の停車駅が実際と違います',
+    stacktrace: undefined,
+    resolved: false,
+    resolvedReason: '',
+    language: 'ja-JP',
+    appVersion: '1.0.0',
+    deviceInfo: null,
+    resolverUid: '',
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_000_000,
+    reporterUid: 'uid-1',
+    imageUrl: null,
+    appEdition: 'production',
+    appClip: false,
+    autoModeEnabled: false,
+  };
+
+  const noul = (v: number) => ({ type: 'noul', noul: v });
+  const typesafeBody = (over: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      model: 'jev-1.13.0',
+      answers: {
+        is_spam: noul(0.02),
+        is_announcement_transcript: noul(0.03),
+        is_praise_only: noul(0.01),
+        is_crash_or_data_loss: noul(0.02),
+        mentions_station_data: noul(0.95),
+        category: {
+          type: 'choice',
+          choice: 'bug',
+          probabilities: {},
+          confidence: 0.91,
+        },
+        component: {
+          type: 'choice',
+          choice: 'station_api',
+          probabilities: {},
+          confidence: 0.86,
+        },
+        severity: {
+          type: 'score',
+          score: 1.9,
+          legend: {},
+          probabilities: {},
+          confidence: 0.8,
+        },
+        actionability: {
+          type: 'score',
+          score: 1.8,
+          legend: {},
+          probabilities: {},
+          confidence: 0.8,
+        },
+        ...over,
+      },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+
+  // biome-ignore lint/suspicious/noExplicitAny: テスト用の最小 Env スタブ
+  type TestEnv = any;
+  const createEnv = (): TestEnv => ({
+    AI: {
+      run: jest.fn().mockResolvedValue({
+        response: JSON.stringify({ title: '停車駅の誤り', summary: '要約' }),
+      }),
+    },
+    CONFIG_KV: {
+      get: jest
+        .fn()
+        .mockResolvedValue(
+          '{"input":"入力例","output":"{\\"title\\":\\"t\\",\\"summary\\":\\"s\\"}"}'
+        ),
+    },
+    STATE_KV: { get: jest.fn().mockResolvedValue(null), put: jest.fn() },
+    AI_TRIAGE_MODEL: 'model',
+    FEW_SHOT_KV_KEY: 'config:fewshot',
+    FEW_SHOT_LIMIT: '4',
+    FEW_SHOT_PER_EX_MAX: '800',
+    TYPESAFE_API_KEY: 'key',
+    TYPESAFE_MODEL: 'jev-latest',
+    OCTOKIT_PAT: 'pat',
+    DISCORD_CS_WEBHOOK_URL: 'https://discord.example.com/webhooks/cs',
+  });
+
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.clearAllMocks();
+  });
+
+  const run = async (env: TestEnv, typesafe: () => Response) => {
+    const created: Record<string, unknown>[] = [];
+    global.fetch = jest.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url === TYPESAFE_API) return typesafe();
+      if (url === ISSUES_API) {
+        created.push(JSON.parse(String(init?.body)));
+        return new Response(
+          JSON.stringify({ html_url: 'https://example.test/1', number: 1 }),
+          { status: 201 }
+        );
+      }
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+    await processFeedbackMessage(
+      {
+        id: 'msg-ts',
+        receivedAt: '2024-01-01T00:00:00.000Z',
+        report,
+        version: 1,
+      } as FeedbackQueueMessage,
+      env
+    );
+    return created;
+  };
+
+  it('判定したカテゴリと優先度をラベルに反映する', async () => {
+    const created = await run(
+      createEnv(),
+      () => new Response(typesafeBody(), { status: 200 })
+    );
+    const labels = created[0]?.labels as string[];
+    expect(labels).toContain('🐛 Bug');
+    expect(labels).toContain('🟠 P1 / High');
+    expect(created[0]?.title).toBe('停車駅の誤り');
+  });
+
+  it('判定を取得できなくても、生成したタイトルを保ったまま起票する', async () => {
+    const created = await run(
+      createEnv(),
+      () => new Response('boom', { status: 500 })
+    );
+    // 原文もタイトルも失わない。原因を絞り込めなかった扱いにするだけ。
+    expect(created[0]?.title).toBe('停車駅の誤り');
+    expect(String(created[0]?.body)).toContain('特急の停車駅が実際と違います');
+    expect(created[0]?.labels as string[]).toContain('❓ Unknown Type');
+  });
+
+  it('スパム確定ではないが確認が必要な判定は、公開リポジトリへ出さない', async () => {
+    // compose は「スパム確定ではないが人手確認に回す」場合に needsSpamReview を立てる。
+    // これを落とすと resolvePublicIssueRepo のガードが素通りし、確認前の
+    // フィードバックが公開リポジトリのスタブ Issue になる。
+    const created = await run(
+      createEnv(),
+      () =>
+        new Response(
+          typesafeBody({
+            // スパム確定（0.5）には届かないが確認下限（0.3）は超える
+            is_spam: noul(0.4),
+            is_praise_only: noul(0.05),
+          }),
+          { status: 200 }
+        )
+    );
+    expect(created[0]?.labels as string[]).toContain('❓ Unknown Type');
+    // 非公開リポジトリへの起票だけで、公開リポジトリへは出ていない
+    expect(created).toHaveLength(1);
+  });
+
+  it('スパムと判定されたらタイトルを伏せてスパムラベルを付ける', async () => {
+    const created = await run(
+      createEnv(),
+      () =>
+        new Response(
+          typesafeBody({
+            is_spam: noul(0.95),
+            is_announcement_transcript: noul(0.9),
+          }),
+          { status: 200 }
+        )
+    );
+    expect(created[0]?.title).toBe(NON_ACTIONABLE_TITLE);
+    expect(created[0]?.labels as string[]).toContain('💩 Spam');
+  });
+});

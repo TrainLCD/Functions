@@ -1,0 +1,20 @@
+{"id": "ocean-nationwide", "request": "海が見える駅に行きたい", "queries": ["海", "根府川", "稲毛海岸"], "expect": ["根府川", "稲毛海岸"], "reject": ["北海道医療大学"], "note": "「海」の部分一致で海と無関係な駅が混ざるプールから拾えるか。種差海岸・松島海岸は実際に海沿いなので reject にしない"}
+{"id": "ocean-from-tokyo", "request": "海が見える駅に行きたい", "from": "東京", "queries": ["根府川", "早川", "真鶴", "海"], "expect": ["根府川", "早川", "真鶴"], "reject": [], "note": "現在駅つき。東海道線の海側3駅はシステムプロンプトが例示している"}
+{"id": "ocean-english", "request": "I want to go to a station with an ocean view", "from": "東京", "queries": ["根府川", "真鶴", "海"], "expect": ["根府川", "真鶴"], "reject": [], "note": "英語の要望と日本語の候補。命令文が日本語でも判定できるか"}
+{"id": "onsen-nationwide", "request": "温泉がある駅に行きたい", "queries": ["温泉", "鬼怒川温泉", "大手町"], "expect": [], "reject": ["大手町"], "note": "無関係な駅を1件混ぜて閾値が効くかを見る。他の温泉駅も「温泉がある駅」として妥当なので expect は置かない（実測で全て0.94以上）"}
+{"id": "onsen-atami", "request": "日帰りで温泉に入れる駅はある？", "from": "東京", "queries": ["熱海", "温泉"], "expect": ["熱海"], "reject": [], "note": "東海道線で直通。要望が「日帰り」でも駅の妥当性は変わらない"}
+{"id": "atami-by-name", "request": "熱海に行きたい", "queries": ["熱海", "来宮"], "expect": ["熱海"], "reject": ["来宮", "磐梯熱海"], "note": "駅名の直接指定。隣接駅と、名前に「熱海」を含む別地域の駅を拾ってはいけない"}
+{"id": "shinjuku-exact", "request": "新宿駅に行きたい", "queries": ["新宿"], "expect": ["新宿"], "reject": ["西新宿", "新宿三丁目", "新宿御苑前"], "note": "同名前方一致の取り違え。現在駅なしだと limit:10 が全部「新宿」で埋まり識別テストにならないため東京を起点にする", "from": "東京"}
+{"id": "shinjuku-gyoen", "request": "新宿御苑に行きたい", "queries": ["新宿御苑", "新宿"], "expect": ["新宿御苑前"], "reject": ["新宿"], "note": "shinjuku-exact の逆方向。最短一致に倒れていないか。現在駅なしでは新宿御苑前がプールに入らなかった", "from": "東京"}
+{"id": "kamakura-kokomae", "request": "鎌倉高校前に行きたい", "queries": ["鎌倉"], "expect": ["鎌倉高校前"], "reject": ["鎌倉", "北鎌倉"], "note": "部分一致で親の駅名が上位に来る典型"}
+{"id": "kamakura-kokomae-roman", "request": "Kamakura-kokomae", "queries": ["鎌倉"], "expect": ["鎌倉高校前"], "reject": ["鎌倉"], "note": "ローマ字の駅名指定。候補側は日本語表記"}
+{"id": "inage-kaigan", "request": "稲毛海岸", "queries": ["稲毛"], "expect": ["稲毛海岸"], "reject": ["稲毛", "京成稲毛"], "note": "駅名だけの発話。要望の語をそのまま含む駅を選べるか"}
+{"id": "kinugawa-partial", "request": "鬼怒川温泉に行きたい", "queries": ["鬼怒川"], "expect": ["鬼怒川温泉"], "reject": ["鬼怒川公園"], "note": "システムプロンプトが例示している引き直し（鬼怒川温泉→鬼怒川）のプール"}
+{"id": "osaka-castle", "request": "お城が見たい", "queries": ["城", "大阪城公園"], "expect": ["大阪城公園"], "reject": ["磐城太田"], "note": "「城」の部分一致は旧国名の「磐城」など城と無関係な駅名を多く含む"}
+{"id": "tateyama-boso", "request": "房総の海沿いに行きたい", "from": "東京", "queries": ["館山", "海"], "expect": ["館山"], "reject": ["熱海", "東海"], "note": "地域名つきの要望。内房線はシステムプロンプトの例示。房総でない海沿いの駅を弾けるか"}
+{"id": "quiet-scenery", "request": "静かで景色のいい駅に行きたい", "from": "東京", "queries": ["根府川", "新宿", "東京"], "expect": ["根府川"], "reject": ["新宿"], "note": "主観的な要望。繁華街の駅を弾けるか"}
+{"id": "ambiguous-short", "request": "どこか行きたい", "queries": ["新宿", "根府川"], "expect": [], "reject": [], "note": "条件が無い発話。expect も reject も置かず、確率が横並びになるかだけを見る"}
+{"id": "no-match-ski", "request": "スキー場のある駅に行きたい", "queries": ["新宿", "大手町"], "expectEmpty": true, "note": "合成。プールを意図的に無関係にした。閾値で全部落ちるべき（温泉地はスキー場が近いものがあるため検索語から外した）"}
+{"id": "no-match-zoo", "request": "動物園に行きたい", "queries": ["大手町", "稲毛"], "expectEmpty": true, "note": "合成。同上"}
+{"id": "no-match-airport", "request": "空港に行きたい", "queries": ["根府川", "熱海"], "expectEmpty": true, "note": "合成。要望は実在するが、プールには一致する駅が無い"}
+{"id": "no-match-unrelated-onsen", "request": "美術館のある駅に行きたい", "queries": ["温泉", "鬼怒川温泉"], "expectEmpty": true, "note": "合成。温泉駅だけのプールに美術館の要望を当てる"}
