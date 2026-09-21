@@ -65,6 +65,13 @@ describe('utils/normalize.ts', () => {
     expect(normalizeRomanText('The next station is Nishi-Mine.')).toBe(
       'The next station is Nishi-me-nay.'
     );
+    // 宇都宮ライトレールの嶺（Mine）のような単独の駅名
+    expect(normalizeRomanText('The next stop is Mine.')).toBe(
+      'The next stop is Me-nay.'
+    );
+    expect(normalizeRomanText('This train is bound for Mine.')).toBe(
+      'This train is bound for Me-nay.'
+    );
     // 語中・語頭に埋まった mine も置換する
     expect(normalizeRomanText('Takamine')).toBe('Taka-me-nay');
     expect(normalizeRomanText('Minezaki')).toBe('Me-nay-zaki');
