@@ -19,6 +19,11 @@ export const handleFeedback = async (
   if (!report?.id) {
     throw new CallableError('invalid-argument', 'report.id required');
   }
+  // 本文が空白のみのフィードバックはトリアージへ流さない。文字数の下限は設けず、
+  // 短い本文やクラッシュレポートの短いエラーメッセージはそのまま受け付ける。
+  if (typeof report.description !== 'string' || !report.description.trim()) {
+    throw new CallableError('invalid-argument', 'report.description required');
+  }
 
   // reporterUid はクライアント申告を信用せず、検証済みトークンの sub で上書きする。
   // （他ユーザーの UID を名乗って Issue/Discord に載せるなりすましを防ぐ）
