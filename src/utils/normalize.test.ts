@@ -63,11 +63,14 @@ describe('utils/normalize.ts', () => {
       'The next station is Me-nay.'
     );
     expect(normalizeRomanText('The next station is Nishi-Mine.')).toBe(
-      'The next station is Nishi-Me-nay.'
+      'The next station is Nishi-me-nay.'
     );
-    // 別語の一部は置換しない
+    // 語中・語頭に埋まった mine も置換する
+    expect(normalizeRomanText('Takamine')).toBe('Taka-me-nay');
+    expect(normalizeRomanText('Minezaki')).toBe('Me-nay-zaki');
+    expect(normalizeRomanText('KAMINEYAMA')).toBe('Ka-me-nay-yama');
+    // mine を含まない語は変えない
     expect(normalizeRomanText('Minami-Urawa')).toBe('Minami-urawa');
-    expect(normalizeRomanText('Takamine')).toBe('Takamine');
   });
 
   it('keeps Kay-say stable when normalized twice', () => {
@@ -80,6 +83,9 @@ describe('utils/normalize.ts', () => {
     );
     expect(normalizeRomanText(normalizeRomanText('Mine Line'))).toBe(
       'Me-nay Line'
+    );
+    expect(normalizeRomanText(normalizeRomanText('Takamine'))).toBe(
+      'Taka-me-nay'
     );
   });
 
