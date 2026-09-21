@@ -65,7 +65,7 @@ describe('utils/normalize.ts', () => {
     expect(normalizeRomanText('The next station is Nishi-Mine.')).toBe(
       'The next station is Nishi-me-nay.'
     );
-    // 宇都宮ライトレールの嶺（Mine）のような単独の駅名
+    // 宇都宮ライトレールの峰（Mine）のような単独の駅名
     expect(normalizeRomanText('The next stop is Mine.')).toBe(
       'The next stop is Me-nay.'
     );
