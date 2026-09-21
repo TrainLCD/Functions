@@ -43,23 +43,35 @@ describe('handleFeedback', () => {
     });
   });
 
+  // code は HTTP ステータスへ直結する（invalid-argument なら 400）。CallableError で
+  // あることしか見ていないと、internal へ変わって 500 を返すようになっても気づけない。
+  // アプリは 4xx と 5xx で扱いを変えられるため、コードまで固定する。
   it.each([
     ['empty', ''],
     ['whitespace only', '  \n\t '],
+    ['number', 1],
+    ['null', null],
   ])(
     'rejects a %s description without queueing',
     async (_label, description) => {
-      await expect(
-        handleFeedback(buildRequest({ ...baseReport, description }), env)
-      ).rejects.toThrow(CallableError);
+      const rejected = handleFeedback(
+        buildRequest({ ...baseReport, description }),
+        env
+      );
+
+      await expect(rejected).rejects.toThrow(CallableError);
+      await expect(rejected).rejects.toMatchObject({
+        code: 'invalid-argument',
+      });
       expect(send).not.toHaveBeenCalled();
     }
   );
 
   it('rejects a missing description without queueing', async () => {
-    await expect(
-      handleFeedback(buildRequest({ id: 'feedback-id' }), env)
-    ).rejects.toThrow(/report.description required/);
+    const rejected = handleFeedback(buildRequest({ id: 'feedback-id' }), env);
+
+    await expect(rejected).rejects.toThrow(/report.description required/);
+    await expect(rejected).rejects.toMatchObject({ code: 'invalid-argument' });
     expect(send).not.toHaveBeenCalled();
   });
 });
