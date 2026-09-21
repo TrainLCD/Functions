@@ -43,6 +43,9 @@ const normalizeTextNode = (text: string): string =>
     // ハイフン連結の駅名も語単位で置換する
     .replace(/\bKeisei\b/gi, 'Kay-say')
     .replace(/\bSeibu\b/gi, 'Say-boo')
+    // 「Mine（美祢・峰など）」は英語 TTS が英単語 "mine"（まいん）として読むため、
+    // 同じく辞書語 "Me" + "nay" の連結で /mi.neɪ/（みね）に寄せる
+    .replace(/\bMine\b/gi, 'Me-nay')
     // 都営バスを想定
     .replace(/\bSta\./gi, ' Station')
     .replace(/\bUniv\./gi, ' University')

@@ -54,6 +54,22 @@ describe('utils/normalize.ts', () => {
     expect(normalizeRomanText('Seibuen')).toBe('Seibuen');
   });
 
+  it('replaces Mine with a spelling English TTS reads as みね', () => {
+    // 英語 TTS は "Mine" を英単語の「まいん」と読むため、辞書語の綴りへ倒す
+    expect(normalizeRomanText('Change here for the Mine Line.')).toBe(
+      'Change here for the Me-nay Line.'
+    );
+    expect(normalizeRomanText('The next station is MINE.')).toBe(
+      'The next station is Me-nay.'
+    );
+    expect(normalizeRomanText('The next station is Nishi-Mine.')).toBe(
+      'The next station is Nishi-Me-nay.'
+    );
+    // 別語の一部は置換しない
+    expect(normalizeRomanText('Minami-Urawa')).toBe('Minami-urawa');
+    expect(normalizeRomanText('Takamine')).toBe('Takamine');
+  });
+
   it('keeps Kay-say stable when normalized twice', () => {
     // 二重に適用しても結果が変わらないこと（キャッシュキーの安定性）
     expect(normalizeRomanText(normalizeRomanText('Keisei Main Line'))).toBe(
@@ -61,6 +77,9 @@ describe('utils/normalize.ts', () => {
     );
     expect(normalizeRomanText(normalizeRomanText('Seibu Shinjuku Line'))).toBe(
       'Say-boo Shinjuku Line'
+    );
+    expect(normalizeRomanText(normalizeRomanText('Mine Line'))).toBe(
+      'Me-nay Line'
     );
   });
 
