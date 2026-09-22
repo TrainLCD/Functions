@@ -12,14 +12,17 @@ describe('buildContextMessage', () => {
     expect(msg).toContain('現在駅: 西船橋駅（Nishi-Funabashi）');
     expect(msg).toContain('JR総武線・東京メトロ東西線');
     expect(msg).toContain('「ここ」');
-    // 到達可能性による絞り込みは仕様。0 件を「存在しない」と誤解させない
-    expect(msg).toContain('乗り換えなしで行ける駅だけを返す');
+    // 到達可能性による絞り込みは仕様。乗り換えが必要な駅も含むことを伝える
+    expect(msg).toContain('鉄道で行ける駅だけを返す');
+    expect(msg).toContain('乗り換えが必要な駅も含む');
+    expect(msg).not.toContain('乗り換えなしで行ける駅だけ');
   });
 
   it('現在駅が未解決ならグループ ID のみへフォールバックする', () => {
     const msg = buildContextMessage('ja', null, 1130205);
     expect(msg).toContain('現在駅グループID: 1130205');
-    expect(msg).toContain('乗り換えなしで行ける駅だけを返す');
+    expect(msg).toContain('鉄道で行ける駅だけを返す');
+    expect(msg).toContain('乗り換えが必要な駅も含む');
     expect(msg).not.toContain('「ここ」');
   });
 
@@ -43,10 +46,11 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Kinugawa-onsen');
   });
 
-  it('0 件で諦めず直通で行ける沿線から引き直す指示を含む', () => {
+  it('検索結果に乗り換えが必要な駅も含まれることを伝え 0 件で諦めさせない', () => {
     const prompt = buildSystemPrompt(null);
-    expect(prompt).toContain('乗り換えなしで行ける駅');
-    expect(prompt).toContain('直通で行ける範囲に代替候補がないか確認する');
+    expect(prompt).toContain('乗り換えれば行ける駅も含む');
+    expect(prompt).toContain('0 件でもすぐ諦めない');
+    expect(prompt).not.toContain('「現在駅から乗り換えなしで行ける駅」に');
   });
 
   // 端末が英語設定でも日本語で聞かれたら日本語で返す（locale 追従をやめた経緯）
@@ -61,23 +65,29 @@ describe('buildSystemPrompt', () => {
     );
   });
 
-  it('直通候補が無いときも最終目的に役立つ次の一手を案内させる', () => {
+  it('乗り換えが必要な駅も行き先として直接提案させ経路の詳細は断定させない', () => {
     const prompt = buildSystemPrompt(null);
     expect(prompt).toContain(
-      '「目的地へ行けない」ではなく「現在駅から直通の候補としては確認できない」と区別'
+      '乗り換えが必要でもそのまま suggestions に含めてよい'
+    );
+    expect(prompt).toContain('ユーザが行きたい駅そのものを提案する');
+    expect(prompt).toContain(
+      '経由する路線・乗換駅・乗り換えの回数・\n  所要時間・運賃・直通運転の有無は、確認できないので断定しない'
+    );
+    // 直通の乗換地点だけを提案させていた旧手順は残さない
+    expect(prompt).not.toContain('現在駅から直通で行ける乗換地点');
+  });
+
+  it('候補が見つからないときも最終目的に役立つ次の一手を案内させる', () => {
+    const prompt = buildSystemPrompt(null);
+    expect(prompt).toContain(
+      '「目的地が存在しない」ではなく「現在駅から鉄道で行ける候補としては確認できない」と区別'
     );
     expect(prompt).toContain(
-      '最終目的地への接続まで確認できる情報がある場合に限り'
+      'suggestions を空配列にし、ユーザが答えられる具体的な確認を 1 つだけ返す'
     );
     expect(prompt).toContain(
-      'search_stations_by_name の結果は現在駅からの直通到達性しか保証しない'
-    );
-    expect(prompt).toContain('それだけを根拠に駅を乗換地点として扱わない');
-    expect(prompt).toContain(
-      '最終目的地への接続を確認できない場合は suggestions を空配列'
-    );
-    expect(prompt).toContain(
-      '単に「乗り換えが必要です」「見つかりませんでした」と言い換えて終えない'
+      '単に「見つかりませんでした」と言い換えて終えない'
     );
   });
 });

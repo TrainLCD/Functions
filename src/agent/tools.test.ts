@@ -395,7 +395,7 @@ describe('createStationSearchTool', () => {
     expect(result.notice).not.toContain('reachable');
   });
 
-  it('現在駅ありの 0 件は「直通で行けないだけ」と伝える', async () => {
+  it('現在駅ありの 0 件は「鉄道で行けないか表記違い」と伝える', async () => {
     const tool = createStationSearchTool({
       search: jest.fn().mockResolvedValue([]),
       verified: new Map(),
@@ -404,10 +404,13 @@ describe('createStationSearchTool', () => {
     });
     const result = await execute(tool, '江ノ島');
     expect(result.stations).toEqual([]);
-    expect(result.notice).toContain('without a transfer');
+    // 乗り換えが必要な駅も検索対象なので、直通で行けないだけとは言わない
+    expect(result.notice).toContain(
+      'stations that need a transfer are included'
+    );
+    expect(result.notice).not.toContain('without a transfer');
     expect(result.notice).toContain('does NOT mean it does not exist');
-    // 乗入路線はコンテキストで渡っているので沿線での引き直しを促せる
-    expect(result.notice).toContain("current station's own lines");
+    expect(result.notice).toContain('another station in the same area');
   });
 
   it('現在駅が未解決なら沿線での引き直しではなくユーザへの確認を促す', async () => {
@@ -418,9 +421,9 @@ describe('createStationSearchTool', () => {
       scope: 'reachable-from-unknown-station',
     });
     const result = await execute(tool, '江ノ島');
-    expect(result.notice).toContain('without a transfer');
-    // 路線名を知らないモデルに沿線検索を指示しない
-    expect(result.notice).not.toContain("current station's own lines");
+    expect(result.notice).toContain(
+      'stations that need a transfer are included'
+    );
     expect(result.notice).toContain('ask the user which area or line');
   });
 
@@ -436,12 +439,15 @@ describe('createStationSearchTool', () => {
       }).description ?? '';
 
     expect(describe_('reachable-from-known-station')).toContain(
-      '現在駅の乗入路線・直通先の沿線にある別の駅で引き直すこと'
+      '乗り換えが必要な駅も含む'
+    );
+    expect(describe_('reachable-from-known-station')).toContain(
+      '同じ地域の別の駅で引き直すこと'
     );
     expect(describe_('reachable-from-unknown-station')).toContain(
       'ユーザにどのエリア・路線にいるかを尋ねること'
     );
-    expect(describe_()).not.toContain('乗り換えなし');
+    expect(describe_()).not.toContain('鉄道で行ける駅に限定');
   });
 
   it('検索失敗はエラーにせずツール結果として返す', async () => {

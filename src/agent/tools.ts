@@ -300,7 +300,7 @@ export const fetchStationByGroupId = async (
 
 /**
  * 駅検索のスコープ。上流の stationsByName は fromStationGroupId を渡すと
- * 「その駅から乗り換えなしで行ける駅」だけを返す（仕様）ため、
+ * 「その駅から鉄道で行ける駅」（乗り換えが必要な駅を含む）だけを返す（仕様）ため、
  * 0 件の意味とモデルへ促す次の一手がスコープごとに変わる。
  */
 export type StationSearchScope =
@@ -316,23 +316,22 @@ const NO_MATCH_NOTICE: Record<StationSearchScope, string> = {
   // 表記ゆれだけを疑わせる
   nationwide:
     'No match. Retry with the Japanese name (kanji or kana), or a shorter distinctive part of the name (e.g. an area name) with no spaces and no "Station" suffix.',
-  // 0 件は「存在しない」ではなく「直通で行けない」の可能性が高い。
-  // 現在駅の乗入路線はコンテキストに含まれているため、沿線での引き直しを促せる
+  // 乗り換えが必要な駅も返るので、0 件は表記ゆれか「鉄道で行けない」のどちらか。
+  // 存在しないと決めつけさせず、表記と同じ地域の別の駅で引き直させる
   'reachable-from-known-station':
-    'No match. Results are limited to stations reachable from the user\'s current station without a transfer, so a well-known station may simply be out of reach — this does NOT mean it does not exist. Retry with the Japanese name (kanji or kana, no spaces, no "Station" suffix), or with a different station on the current station\'s own lines or their through-services. Do not give up after one empty result.',
-  // 路線名がモデルに渡っていないため、沿線での引き直しは指示できない。
-  // 表記ゆれの確認と、ユーザへの確認を促す
+    'No match. Results are limited to stations reachable by rail from the user\'s current station (stations that need a transfer are included), so the station may be out of reach by rail or the name may not match — this does NOT mean it does not exist. Retry with the Japanese name (kanji or kana, no spaces, no "Station" suffix), a shorter distinctive part of the name, or another station in the same area. Do not give up after one empty result.',
+  // 表記を変えても 0 件なら、推測せずユーザへの確認を促す
   'reachable-from-unknown-station':
-    'No match. Results are limited to stations reachable from the user\'s current station without a transfer, so a well-known station may simply be out of reach — this does NOT mean it does not exist. The current station could not be resolved, so its lines are unknown: retry with the Japanese name (kanji or kana, no spaces, no "Station" suffix), and if it is still empty, ask the user which area or line they are on instead of guessing.',
+    'No match. Results are limited to stations reachable by rail from the user\'s current station (stations that need a transfer are included), so the station may be out of reach by rail or the name may not match — this does NOT mean it does not exist. The current station could not be resolved: retry with the Japanese name (kanji or kana, no spaces, no "Station" suffix), and if it is still empty, ask the user which area or line they are on instead of guessing.',
 };
 
 /** 現在駅のスコープでのみ足すツール説明（路線名を知らないケースでは案内を変える） */
 const SCOPE_DESCRIPTION: Record<StationSearchScope, string | null> = {
   nationwide: null,
   'reachable-from-known-station':
-    '結果は現在駅から乗り換えなしで行ける駅に限定される（仕様）。0 件は「存在しない」ではなく「直通で行けない」ことが多いため、現在駅の乗入路線・直通先の沿線にある別の駅で引き直すこと。',
+    '結果は現在駅から鉄道で行ける駅に限定される（仕様）。乗り換えが必要な駅も含む。0 件は「存在しない」ではなく、表記が照合できていないか鉄道で行けないことが多いため、表記を変えるか同じ地域の別の駅で引き直すこと。',
   'reachable-from-unknown-station':
-    '結果は現在駅から乗り換えなしで行ける駅に限定される（仕様）。0 件は「存在しない」ではなく「直通で行けない」ことが多い。現在駅の路線は不明なため、表記を変えても 0 件ならユーザにどのエリア・路線にいるかを尋ねること。',
+    '結果は現在駅から鉄道で行ける駅に限定される（仕様）。乗り換えが必要な駅も含む。現在駅の路線は不明なため、表記を変えても 0 件ならユーザにどのエリア・路線にいるかを尋ねること。',
 };
 
 /** ツール結果（駅一覧と、0 件・失敗時にモデルへ返す次の一手） */
