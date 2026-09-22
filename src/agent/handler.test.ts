@@ -167,7 +167,7 @@ describe('runAgentTurn', () => {
     expect(result.reply).toBe('見つかりませんでした。');
   });
 
-  it('現在駅ありの 0 件は「直通で行けないだけ」とモデルへ伝える', async () => {
+  it('現在駅ありの 0 件は乗り換えが必要な駅も含めた結果だとモデルへ伝える', async () => {
     let notice: string | undefined;
     const streamText: AnyFn = jest.fn(async (options: AnyFn) => {
       const toolResult = await options.tools.search_stations_by_name.execute(
@@ -183,7 +183,7 @@ describe('runAgentTurn', () => {
       searchScope: 'reachable-from-known-station',
       searchStations: jest.fn().mockResolvedValue([]),
     });
-    expect(notice).toContain('without a transfer');
+    expect(notice).toContain('stations that need a transfer are included');
   });
 
   it('現在駅の解決状況でスコープを分ける', () => {
