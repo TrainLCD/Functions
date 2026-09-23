@@ -175,3 +175,27 @@ describe('resolveGoogleReasoningSetting', () => {
     expect(resolveOpenAIReasoningOptions('gemini-3.8-flash')).toBeUndefined();
   });
 });
+
+describe('resolveOpenAIReasoningOptions', () => {
+  it("'none' 対応が確認できている GPT-5.1 以降・GPT-6 系では none を返す", () => {
+    expect(resolveOpenAIReasoningOptions('gpt-5.1')).toEqual({
+      reasoningEffort: 'none',
+    });
+    expect(resolveOpenAIReasoningOptions('gpt-5.6-luna')).toEqual({
+      reasoningEffort: 'none',
+    });
+    expect(resolveOpenAIReasoningOptions('gpt-6-luna')).toEqual({
+      reasoningEffort: 'none',
+    });
+    expect(resolveOpenAIReasoningOptions('gpt-6')).toEqual({
+      reasoningEffort: 'none',
+    });
+  });
+
+  it('gpt-5 無印・o 系・非 reasoning モデルには何も指定しない', () => {
+    expect(resolveOpenAIReasoningOptions('gpt-5')).toBeUndefined();
+    expect(resolveOpenAIReasoningOptions('gpt-5-mini')).toBeUndefined();
+    expect(resolveOpenAIReasoningOptions('o4-mini')).toBeUndefined();
+    expect(resolveOpenAIReasoningOptions('gpt-4.1')).toBeUndefined();
+  });
+});
