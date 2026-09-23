@@ -103,7 +103,7 @@ The conversational agent picks its provider from `AGENT_MODEL`, written as
 
 | `AGENT_MODEL`             | Provider                | Required secret        |
 | ------------------------- | ----------------------- | ---------------------- |
-| `openai:gpt-5.6-luna`     | OpenAI                  | `OPENAI_API_KEY`       |
+| `openai:gpt-6-luna`       | OpenAI                  | `OPENAI_API_KEY`       |
 | `anthropic:<model>`       | Anthropic               | `ANTHROPIC_API_KEY`    |
 | `google:gemini-3.8-flash` | Google Vertex AI        | `GOOGLE_VERTEX_SA_KEY` |
 

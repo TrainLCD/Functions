@@ -138,11 +138,11 @@ const modelIdOf = (model: LanguageModel): string =>
 
 /**
  * reasoningEffort: 'none' を受け付ける OpenAI モデル（GPT-5.1 系以降の
- * マイナーバージョン付き GPT-5）。gpt-5 無印（'minimal' まで）・o 系
+ * マイナーバージョン付き GPT-5 と GPT-6 系）。gpt-5 無印（'minimal' まで）・o 系
  * （low/medium/high のみ）・非 reasoning モデル（パラメータ自体を拒否）へ
  * 'none' を送ると API エラー（400）になる。
  */
-const OPENAI_REASONING_NONE_MODELS = /^gpt-5\.[1-9]/;
+const OPENAI_REASONING_NONE_MODELS = /^gpt-(?:5\.[1-9]|6(?:[.-]|$))/;
 
 /**
  * OpenAI 向け reasoning 抑制の providerOptions をモデル別に解決する。
