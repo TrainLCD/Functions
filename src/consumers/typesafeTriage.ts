@@ -93,6 +93,12 @@ const T = {
 } as const;
 
 /**
+ * スパム確定には満たないが人手確認に回す下限。キーワード判定（looksLikeSpam）が
+ * Jev の非スパム判定を覆してよいかの境界にも使う。
+ */
+export const SPAM_REVIEW_THRESHOLD = T.SPAM_REVIEW;
+
+/**
  * 1 リクエストにまとめて投げる。TypeSafe の質問は互いに独立で並列評価されるため、
  * 一部の入力でしか使わない質問（praise 判定など）も投機的に同梱してよい。
  *
@@ -249,6 +255,8 @@ export const QUESTIONS = {
 export type Verdict = {
   isSpam: boolean;
   needsSpamReview: boolean;
+  /** is_spam と is_announcement_transcript の大きい方。スパムらしさの生の信号 */
+  spamSignal: number;
   category: string;
   categoryConfidence: number;
   component: string;
@@ -300,6 +308,7 @@ export function compose(answers: Record<string, Answer>): Verdict {
   return {
     isSpam,
     needsSpamReview,
+    spamSignal: Math.max(spamSignal, announcement),
     category,
     categoryConfidence: cat.confidence,
     component: isSpam ? 'unknown' : comp.choice,

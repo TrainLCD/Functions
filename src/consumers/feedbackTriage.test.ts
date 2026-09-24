@@ -21,6 +21,7 @@ import {
   TRIAGE_FAILED_SUMMARY,
   triageMarkerKey,
 } from './feedbackTriage';
+import { SPAM_REVIEW_THRESHOLD } from './typesafeTriage';
 
 describe('coerceReport', () => {
   it('returns defaults when category and triageLevel are missing', () => {
@@ -449,6 +450,28 @@ describe('looksLikeSpam（正当な報告の誤判定）', () => {
     expect(looksLikeSpam('駅ナンバリングの表記がおかしいです')).toBe(false);
   });
 
+  it('放送定型句を引用した変更依頼をスパムにしない', () => {
+    // 期待する放送文言を並べ、報告者の訴えは「変更お願いします」だけで示すケース
+    expect(
+      looksLikeSpam(
+        [
+          '架空線普通は仮駅までしか行かないので仮駅行きに変更お願いします',
+          '例駅から各駅に止まります放送お願いします',
+          '架空線.見本線乗換え変更お願いします',
+          '見本線例駅方面',
+        ].join('\n')
+      )
+    ).toBe(false);
+  });
+
+  it('「ご協力をお願いします」は依頼として扱わない', () => {
+    expect(
+      looksLikeSpam(
+        '次は仮駅、仮駅です。この電車は各駅に停まります。例駅方面へお越しの方はお乗り換えです。ご協力をお願いします'
+      )
+    ).toBe(true);
+  });
+
   it('放送定型句を伴わない停車駅・方面の言及だけでは加点しない', () => {
     // ACTIONABLE に一致しない書き方でも、放送の書き起こしでなければスパムにしない
     expect(looksLikeSpam('架空線の停車駅と方面の情報について')).toBe(false);
@@ -484,11 +507,11 @@ describe('applySpamHeuristic', () => {
   const transcript =
     '次は仮駅、仮駅です。お出口は左側です。ご利用ありがとうございます。';
 
-  it('モデルが確信を持って非スパムと判定していれば分類を維持し、人手確認に回す', () => {
+  it('Jev のスパム信号が低ければ分類を維持し、人手確認に回す', () => {
     const { report, needsSpamReview } = applySpamHeuristic(
-      notSpam(SPAM_OVERRIDE_MAX_CONFIDENCE),
+      notSpam(0.9),
       transcript,
-      { triageFailed: false }
+      { triageFailed: false, spamSignal: SPAM_REVIEW_THRESHOLD - 0.01 }
     );
     expect(needsSpamReview).toBe(true);
     expect(report.isSpam).toBe(false);
@@ -497,11 +520,23 @@ describe('applySpamHeuristic', () => {
     expect(report.category).toBe('bug');
   });
 
-  it('モデルの確信度が低い場合はヒューリスティックでスパムに倒す', () => {
+  it('カテゴリの確信度が低くても、Jev のスパム信号が低ければ上書きしない', () => {
+    // TrainLCD/Issues#1281: 改善要望か新機能要望かの迷いで confidence が 0.4 に
+    // なっただけの変更依頼が、スパムに上書きされていた
     const { report, needsSpamReview } = applySpamHeuristic(
-      notSpam(SPAM_OVERRIDE_MAX_CONFIDENCE - 0.01),
+      notSpam(0.4),
       transcript,
-      { triageFailed: false }
+      { triageFailed: false, spamSignal: 0.18 }
+    );
+    expect(needsSpamReview).toBe(true);
+    expect(report.isSpam).toBe(false);
+  });
+
+  it('Jev のスパム信号が確認下限以上ならヒューリスティックでスパムに倒す', () => {
+    const { report, needsSpamReview } = applySpamHeuristic(
+      notSpam(0.9),
+      transcript,
+      { triageFailed: false, spamSignal: SPAM_REVIEW_THRESHOLD }
     );
     expect(needsSpamReview).toBe(false);
     expect(report.isSpam).toBe(true);
@@ -509,12 +544,30 @@ describe('applySpamHeuristic', () => {
     expect(report.labels).toEqual([]);
   });
 
+  it('Jev の判定が無いときは confidence で上書きの可否を決める', () => {
+    const kept = applySpamHeuristic(
+      notSpam(SPAM_OVERRIDE_MAX_CONFIDENCE),
+      transcript,
+      { triageFailed: false, spamSignal: null }
+    );
+    expect(kept.needsSpamReview).toBe(true);
+    expect(kept.report.isSpam).toBe(false);
+
+    const overridden = applySpamHeuristic(
+      notSpam(SPAM_OVERRIDE_MAX_CONFIDENCE - 0.01),
+      transcript,
+      { triageFailed: false, spamSignal: null }
+    );
+    expect(overridden.needsSpamReview).toBe(false);
+    expect(overridden.report.isSpam).toBe(true);
+  });
+
   it('正当な報告には何もしない', () => {
     const input = notSpam(0.9);
     const { report, needsSpamReview } = applySpamHeuristic(
       input,
       '架空線の停車駅が違います',
-      { triageFailed: false }
+      { triageFailed: false, spamSignal: 0.05 }
     );
     expect(needsSpamReview).toBe(false);
     expect(report).toBe(input);
@@ -524,6 +577,7 @@ describe('applySpamHeuristic', () => {
     const failed = buildFailedReport(transcript, 72);
     const { report, needsSpamReview } = applySpamHeuristic(failed, transcript, {
       triageFailed: true,
+      spamSignal: null,
     });
     expect(needsSpamReview).toBe(false);
     expect(report).toBe(failed);
@@ -534,6 +588,7 @@ describe('applySpamHeuristic', () => {
     const spam = { ...notSpam(0.9), isSpam: true };
     const { report, needsSpamReview } = applySpamHeuristic(spam, transcript, {
       triageFailed: false,
+      spamSignal: 0.9,
     });
     expect(needsSpamReview).toBe(false);
     expect(report).toBe(spam);
