@@ -151,3 +151,14 @@ describe('needsSpamReview', () => {
     expect(v.needsSpamReview).toBe(false);
   });
 });
+
+describe('spamSignal', () => {
+  it('is_spam と is_announcement_transcript の大きい方を返す', () => {
+    expect(compose(answers({ spam: 0.2, announcement: 0.4 })).spamSignal).toBe(
+      0.4
+    );
+    expect(compose(answers({ spam: 0.6, announcement: 0.1 })).spamSignal).toBe(
+      0.6
+    );
+  });
+});

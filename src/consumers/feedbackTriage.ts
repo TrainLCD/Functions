@@ -13,7 +13,11 @@ import type {
 import type { DiscordEmbed } from '../models/common';
 import type { Report } from '../models/feedback';
 import type { Env, FeedbackQueueMessage } from '../types';
-import { judgeFeedback, type Verdict } from './typesafeTriage';
+import {
+  judgeFeedback,
+  SPAM_REVIEW_THRESHOLD,
+  type Verdict,
+} from './typesafeTriage';
 
 /** フィードバック原本を保管する非公開リポジトリ */
 const INTERNAL_REPO = 'TrainLCD/Issues';
@@ -158,9 +162,12 @@ const TRIAGE_SYNONYMS: Record<string, AITriageLevel> = {
  * 断定してよいので、スコアリングに入る前に非スパムとして返す。
  * 「〜が違います」「反映されない」「〜してほしい」のように、報告者が「不具合」「要望」と
  * いう語を使わずに書くケースを取りこぼさないことを重視している。
+ * 「〜に変更お願いします」のような依頼も報告者自身の訴えなので、お願いで拾う。
+ * 「ご協力をお願いします」は車内放送の定型句でもあるため除外する。変更は単独では
+ * 入れない。「行き先を変更し」のように運転変更の放送にも現れるため。
  */
 const ACTIONABLE =
-  /(修正|改善|追加|希望|要望|不具合|バグ|誤|間違|違い|違う|反映|表示|保存|再生|遅|遅延|できない|出来ない|できません|出来ません|されない|されません|しない|しません|エラー|落ちる|クラッシュ|重複|ズレ|ずれ|おかしい|ほしい|欲しい|直し|なおし|音がない|読み上げない)/;
+  /(修正|改善|追加|(?<!ご(協力|理解)を?)お願い|希望|要望|不具合|バグ|誤|間違|違い|違う|反映|表示|保存|再生|遅|遅延|できない|出来ない|できません|出来ません|されない|されません|しない|しません|エラー|落ちる|クラッシュ|重複|ズレ|ずれ|おかしい|ほしい|欲しい|直し|なおし|音がない|読み上げない)/;
 
 /**
  * 車内放送でも報告文でも使われる言い回し。単独では判断できないため早期リターンには
@@ -450,9 +457,9 @@ export function buildFailedReport(
 }
 
 /**
- * ヒューリスティックがモデルの非スパム判定を覆せる、モデル側 confidence の上限。
- * これ以上の確信度でモデルが「スパムではない」と言っているときは、ヒューリスティックは
- * 上書きせず人手確認のマーカーだけを付ける。
+ * Jev の判定が無いときに、ヒューリスティックがスパムに倒してよいかを決める
+ * confidence の上限。判定が無い経路では confidence が 0 になるため、実質的には
+ * 常にヒューリスティックの判断が通る。
  */
 export const SPAM_OVERRIDE_MAX_CONFIDENCE = 0.5;
 
@@ -464,13 +471,22 @@ export const NON_ACTIONABLE_TITLE = '内容未分類（改善要望なし）';
  *
  * ヒューリスティックは補助でしかなく、正当な報告を握りつぶすと利用者の声が
  * 完全に失われる（ラベルもカテゴリも消えて候補プールから脱落する）。そのため
- * モデルが確信を持って「スパムではない」と判定しているときは分類をそのまま残し、
- * 人手確認用のマーカー（needsSpamReview）だけを立てる。
+ * Jev のスパム信号（spamSignal）が低く「スパムではない」と言えているときは分類を
+ * そのまま残し、人手確認用のマーカー（needsSpamReview）だけを立てる。
+ *
+ * 以前はカテゴリの confidence で上書きの可否を決めていたが、これは「改善要望か
+ * 新機能要望か」の迷いを表す値で、スパムかどうかの確信とは無関係だった。
+ * 実際に、Jev が is_spam 0.05 と判定した変更依頼が、カテゴリの confidence 0.4 を
+ * 理由にスパムへ上書きされた（TrainLCD/Issues#1281）。
  */
 export function applySpamHeuristic(
   aiReport: AIReport,
   description: string,
-  opts: { triageFailed: boolean }
+  opts: {
+    triageFailed: boolean;
+    /** Jev のスパム信号。判定を取得できなかったときは null */
+    spamSignal: number | null;
+  }
 ): { report: AIReport; needsSpamReview: boolean } {
   // トリアージ自体が失敗しているレポートは、そもそもモデルの判定が無い。
   // ここでスパムに倒すと「要約失敗」の事実が消えるため触らない。
@@ -479,7 +495,11 @@ export function applySpamHeuristic(
   if (!looksLikeSpam(description)) {
     return { report: aiReport, needsSpamReview: false };
   }
-  if (aiReport.confidence >= SPAM_OVERRIDE_MAX_CONFIDENCE) {
+  const canOverride =
+    opts.spamSignal === null
+      ? aiReport.confidence < SPAM_OVERRIDE_MAX_CONFIDENCE
+      : opts.spamSignal >= SPAM_REVIEW_THRESHOLD;
+  if (!canOverride) {
     return { report: aiReport, needsSpamReview: true };
   }
   return {
@@ -1133,13 +1153,20 @@ async function triageFeedback(
 
   const spamDecision = applySpamHeuristic(aiReport, report.description, {
     triageFailed,
+    spamSignal: judgment?.spamSignal ?? null,
   });
+  if (!aiReport.isSpam && spamDecision.report.isSpam) {
+    console.warn('feedbackTriage: ヒューリスティックでスパムに上書きした', {
+      reportId: report.id,
+      spamSignal: judgment?.spamSignal ?? null,
+    });
+  }
   aiReport = spamDecision.report;
   const { needsSpamReview } = spamDecision;
   if (needsSpamReview) {
     console.warn(
       'feedbackTriage: スパム判定がモデルとヒューリスティックで不一致（人手確認に回す）',
-      { reportId: report.id, confidence: aiReport.confidence }
+      { reportId: report.id, spamSignal: judgment?.spamSignal ?? null }
     );
   }
 
