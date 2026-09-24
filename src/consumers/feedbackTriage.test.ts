@@ -464,6 +464,14 @@ describe('looksLikeSpam（正当な報告の誤判定）', () => {
     ).toBe(false);
   });
 
+  it('「変更」を含む運転変更の放送はスパムとして扱う', () => {
+    expect(
+      looksLikeSpam(
+        '次は仮駅です。この電車は行き先を変更し、例駅方面へ向かいます。'
+      )
+    ).toBe(true);
+  });
+
   it('「ご協力をお願いします」は依頼として扱わない', () => {
     expect(
       looksLikeSpam(
