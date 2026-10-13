@@ -11,6 +11,10 @@ export class GitHubIssueError extends Error {
   }
 }
 
+/**
+ * Issue 作成失敗の応答から、投稿内容を含まない診断情報と再試行遅延を取得する。
+ * Retry-After は秒数・HTTP-date の両形式を扱い、遅延をキューの上限に収める。
+ */
 export async function githubIssueError(
   response: Response,
   now = Date.now()
@@ -32,7 +36,14 @@ export async function githubIssueError(
           );
         })
       : [];
-  const retryAfter = Number(response.headers.get('retry-after'));
+  const retryAfterRaw = response.headers.get('retry-after');
+  let retryAfter = Number(retryAfterRaw);
+  if (retryAfterRaw && !Number.isFinite(retryAfter)) {
+    const retryAt = Date.parse(retryAfterRaw);
+    retryAfter = Number.isFinite(retryAt)
+      ? Math.max(0, (retryAt - now) / 1000)
+      : Number.NaN;
+  }
   const reset = Number(response.headers.get('x-ratelimit-reset'));
   const rateLimited =
     response.status === 429 ||
