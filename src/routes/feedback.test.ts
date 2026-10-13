@@ -1,4 +1,4 @@
-import { CallableError } from '../lib/callable';
+import { CallableError, withCallable } from '../lib/callable';
 import type { Env } from '../types';
 import { handleFeedback } from './feedback';
 
@@ -7,7 +7,10 @@ jest.mock('../lib/auth/session', () => ({
 }));
 
 const send = jest.fn(async (_message: unknown) => undefined);
-const env = { FEEDBACK_QUEUE: { send } } as unknown as Env;
+const env = {
+  OCTOKIT_PAT: 'test-pat',
+  FEEDBACK_QUEUE: { send },
+} as unknown as Env;
 
 const buildRequest = (report: unknown): Request =>
   new Request('https://example.com/postFeedback', {
@@ -27,9 +30,80 @@ const baseReport = {
 };
 
 describe('handleFeedback', () => {
+  const originalFetch = global.fetch;
+  beforeEach(() => {
+    global.fetch = jest.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ has_issues: true, permissions: { push: true } })
+        )
+    ) as typeof fetch;
+  });
+
   afterEach(() => {
+    global.fetch = originalFetch;
     jest.clearAllMocks();
   });
+
+  it.each([401, 403, 404, 429, 500])(
+    'returns an app-visible 503 for GitHub HTTP %s without queueing',
+    async (status) => {
+      global.fetch = jest.fn(
+        async () => new Response(null, { status })
+      ) as typeof fetch;
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const res = await withCallable(() =>
+          handleFeedback(buildRequest(baseReport), env)
+        );
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({
+          error: { status: 'unavailable' },
+        });
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  );
+
+  it('returns 503 on a missing PAT or network failure without queueing', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const missing = await withCallable(() =>
+        handleFeedback(buildRequest(baseReport), { ...env, OCTOKIT_PAT: '' })
+      );
+      expect(missing.status).toBe(503);
+      expect(global.fetch).not.toHaveBeenCalled();
+      global.fetch = jest.fn().mockRejectedValue(new Error('network failure'));
+      const failed = await withCallable(() =>
+        handleFeedback(buildRequest(baseReport), env)
+      );
+      expect(failed.status).toBe(503);
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([null, { has_issues: false }])(
+    'rejects an unavailable issue repository',
+    async (body) => {
+      global.fetch = jest.fn(
+        async () => new Response(JSON.stringify(body))
+      ) as typeof fetch;
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const res = await withCallable(() =>
+          handleFeedback(buildRequest(baseReport), env)
+        );
+        expect(res.status).toBe(503);
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  );
 
   // 文字数の下限は撤廃したため、短い本文もそのままキューへ流す
   it('queues a short report', async () => {

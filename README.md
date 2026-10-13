@@ -309,6 +309,21 @@ completes in 5–17 s at 26–62 neurons per feedback, versus ~1 s and ~4.7 neur
 for the old 8B model. Queue consumers use `max_batch_size: 5`, so a batch stays
 well inside the invocation limit.
 
+### フィードバック受付時の認証確認
+
+`POST /postFeedback` では、キューへの投函前に `OCTOKIT_PAT` で
+`TrainLCD/Issues` のリポジトリ情報を取得します。PAT 未設定・失効、GitHub の
+HTTP エラー、5 秒のタイムアウト、Issues 無効時には、HTTP 503 と
+`{ "error": { "status": "unavailable", "message": "Feedback service is temporarily unavailable. Please try again later." } }`
+を返します。失敗した投稿はキューへ投函しません。
+
+アプリの `useFeedback` は HTTP エラーを送信失敗として扱い、フィードバック画面で
+エラーダイアログを表示します。成功応答はキューへの受付完了を示します。
+受付後の PAT 失効や Issue 作成時の検証エラーまで同期的に保証するものではありません。
+GitHub の Issue 作成失敗は、キューのログに HTTP ステータス、リクエストID、
+検証エラーの項目を残します。レート制限時は `Retry-After` と
+`x-ratelimit-reset` に従って再試行を遅らせます。
+
 ### Dead letter queue
 
 `processFeedbackMessage()` rethrows on failure so the consumer can `retry()`,
