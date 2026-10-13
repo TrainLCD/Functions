@@ -5,6 +5,7 @@ import {
   callableSuccess,
   parseCallableData,
 } from '../lib/callable';
+import { ensureFeedbackAvailable } from '../lib/feedbackAvailability';
 import type { Report } from '../models/feedback';
 import type { Env } from '../types';
 
@@ -24,6 +25,10 @@ export const handleFeedback = async (
   if (typeof report.description !== 'string' || !report.description.trim()) {
     throw new CallableError('invalid-argument', 'report.description required');
   }
+
+  // 認証障害をキュー内だけで検知するとアプリに成功を返してしまうため、
+  // PAT 失効・起票先へのアクセス障害は投函前に 503 として返す。
+  await ensureFeedbackAvailable(env);
 
   // reporterUid はクライアント申告を信用せず、検証済みトークンの sub で上書きする。
   // （他ユーザーの UID を名乗って Issue/Discord に載せるなりすましを防ぐ）
