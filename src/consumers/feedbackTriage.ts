@@ -3,6 +3,7 @@
  * Discord 通知を行う。AI 呼び出し以外のロジックは旧 Cloud Functions から流用。
  */
 import dayjs from 'dayjs';
+import { githubIssueError } from '../lib/githubIssueError';
 import type {
   AICategory,
   AIComponent,
@@ -691,6 +692,7 @@ function githubPost(env: Env, path: string, body: unknown): Promise<Response> {
     method: 'post',
     headers: {
       Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
       Authorization: `Bearer ${env.OCTOKIT_PAT ?? ''}`,
       'X-GitHub-Api-Version': '2022-11-28',
       'User-Agent': 'trainlcd-worker',
@@ -1446,10 +1448,9 @@ export const processFeedbackMessage = async (
   let publicIssueUrl = marker?.publicIssueUrl ?? null;
 
   if (!marker) {
-    try {
-      const res = await githubPost(env, `${INTERNAL_REPO}/issues`, {
-        title: aiReport.title ?? '要約未取得',
-        body: `
+    const res = await githubPost(env, `${INTERNAL_REPO}/issues`, {
+      title: aiReport.title ?? '要約未取得',
+      body: `
 ![Image](${imageUrl})
 
 
@@ -1495,48 +1496,40 @@ ${sentryEventId}
 ## レポーターUID
 ${reporterUid}
         `.trim(),
-        assignees: ['TinyKitten'],
-        milestone: null,
-        labels: [
-          reportType === 'feedback' &&
-            !aiReport.isSpam &&
-            GITHUB_LABELS.FEEDBACK_TYPE,
-          reportType === 'crash' && GITHUB_LABELS.CRASH_TYPE,
-          appEdition === 'production' && GITHUB_LABELS.PRODUCTION_APP,
-          appEdition === 'canary' && GITHUB_LABELS.CANARY_APP,
-          appClip && GITHUB_LABELS.PLATFORM_APPCLIP,
-          aiReport.isSpam && GITHUB_LABELS.SPAM_TYPE,
-          (triageFailed || needsSpamReview) && GITHUB_LABELS.UNKNOWN_TYPE,
-          osNameLabel,
-          autoModeLabel,
-          categoryLabel,
-          triageLabel,
-        ].filter(Boolean),
-      });
+      assignees: ['TinyKitten'],
+      milestone: null,
+      labels: [
+        reportType === 'feedback' &&
+          !aiReport.isSpam &&
+          GITHUB_LABELS.FEEDBACK_TYPE,
+        reportType === 'crash' && GITHUB_LABELS.CRASH_TYPE,
+        appEdition === 'production' && GITHUB_LABELS.PRODUCTION_APP,
+        appEdition === 'canary' && GITHUB_LABELS.CANARY_APP,
+        appClip && GITHUB_LABELS.PLATFORM_APPCLIP,
+        aiReport.isSpam && GITHUB_LABELS.SPAM_TYPE,
+        (triageFailed || needsSpamReview) && GITHUB_LABELS.UNKNOWN_TYPE,
+        osNameLabel,
+        autoModeLabel,
+        categoryLabel,
+        triageLabel,
+      ].filter(Boolean),
+    });
 
-      if (res.status !== 201) {
-        console.error(await res.text().catch(() => ''));
-        throw new Error(`GitHub API failed with status ${res.status}`);
-      }
-
-      // ここから先は Issue 作成済み。throw して再試行させると重複起票になるため、
-      // レスポンスの解析に失敗しても続行し、分かった範囲をマーカーに残す。
-      const created = (await res.json().catch((err: unknown) => {
-        console.error('feedbackTriage: 起票レスポンスの解析に失敗', {
-          reportId: id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return null;
-      })) as { html_url?: string; number?: number } | null;
-      issueNumber = typeof created?.number === 'number' ? created.number : null;
-      issueUrl =
-        typeof created?.html_url === 'string' ? created.html_url : null;
-    } catch (err) {
-      // Issue 作成前の失敗。握りつぶすと queue ハンドラが ack してメッセージを失うため、
-      // 再送出して再試行させる（この時点では Issue は作られていないので重複しない）。
-      console.error(err);
-      throw err;
+    if (res.status !== 201) {
+      throw await githubIssueError(res);
     }
+
+    // ここから先は Issue 作成済み。throw して再試行させると重複起票になるため、
+    // レスポンスの解析に失敗しても続行し、分かった範囲をマーカーに残す。
+    const created = (await res.json().catch((err: unknown) => {
+      console.error('feedbackTriage: 起票レスポンスの解析に失敗', {
+        reportId: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    })) as { html_url?: string; number?: number } | null;
+    issueNumber = typeof created?.number === 'number' ? created.number : null;
+    issueUrl = typeof created?.html_url === 'string' ? created.html_url : null;
 
     // 原因コンポーネントが特定できている場合のみ、該当の公開リポジトリにも起票する。
     // 公開側に載せるのは管理 Issue 番号とチケットIDだけで、フィードバックの内容は含めない。

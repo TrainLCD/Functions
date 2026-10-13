@@ -8,6 +8,7 @@ import {
   processFeedbackMessage,
 } from './consumers/feedbackTriage';
 import { withCallable } from './lib/callable';
+import { GitHubIssueError } from './lib/githubIssueError';
 import { handleAuthToken } from './routes/auth';
 import { handleMaintenanceConfig, handleRemoteConfig } from './routes/config';
 import { handleFeedback } from './routes/feedback';
@@ -80,11 +81,24 @@ const worker: ExportedHandler<Env, FeedbackQueueMessage> = {
         await processFeedbackMessage(message.body, env);
         message.ack();
       } catch (e) {
-        console.error(`Queue message failed (${batch.queue}):`, e);
+        const delaySeconds = Math.max(
+          FEEDBACK_RETRY_DELAY_SECONDS,
+          e instanceof GitHubIssueError ? (e.retryDelaySeconds ?? 0) : 0
+        );
+        console.error(`Queue message failed (${batch.queue}):`, {
+          messageId: message.id,
+          reportId: message.body?.report?.id,
+          errorName: e instanceof Error ? e.name : 'UnknownError',
+          errorMessage: e instanceof Error ? e.message : String(e),
+          ...(e instanceof GitHubIssueError
+            ? { status: e.status, requestId: e.requestId, details: e.details }
+            : {}),
+          delaySeconds,
+        });
         // 遅延なしで再試行すると、processFeedbackMessage が起票直後に書いた
         // 冪等化マーカーを KV のネガティブキャッシュ越しに読めず、Issue を
         // 作り直してしまう。キャッシュが切れてから再試行させる。
-        message.retry({ delaySeconds: FEEDBACK_RETRY_DELAY_SECONDS });
+        message.retry({ delaySeconds });
       }
     }
   },
