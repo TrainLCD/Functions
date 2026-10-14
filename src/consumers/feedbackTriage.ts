@@ -871,7 +871,7 @@ async function recordHandoffResult(
   env: Env,
   internalIssueNumber: number,
   body: string
-): Promise<void> {
+): Promise<boolean> {
   try {
     const res = await githubPost(
       env,
@@ -883,9 +883,12 @@ async function recordHandoffResult(
         status: res.status,
         internalIssueNumber,
       });
+      return false;
     }
+    return true;
   } catch (err) {
     console.error('管理 Issue へのハンドオフ結果コメントに失敗', { err });
+    return false;
   }
 }
 
@@ -912,6 +915,8 @@ export type TriageMarker = {
   aiReport: AIReport;
   /** 旧マーカーには存在しない。起票結果を通知再試行でも保持する。 */
   handoff?: HandoffTrace;
+  /** false のときだけ、保存済みの結果コメントを再送する。旧マーカーは対象外。 */
+  handoffCommentRecorded?: boolean;
   triageFailed: boolean;
   needsSpamReview: boolean;
   /** Discord 通知まで完了しているか */
@@ -984,6 +989,7 @@ async function loadTriageMarker(
       typeof marker.publicIssueUrl === 'string' ? marker.publicIssueUrl : null,
     aiReport: marker.aiReport,
     handoff: marker.handoff,
+    handoffCommentRecorded: marker.handoffCommentRecorded,
     triageFailed: marker.triageFailed === true,
     needsSpamReview: marker.needsSpamReview === true,
     notified: marker.notified === true,
@@ -1481,7 +1487,7 @@ export const processFeedbackMessage = async (
   // 再試行や DLQ からの再投入で同じレポートが流れてきたとき、Issue を重複起票しない
   // ように、処理済みマーカーを見て済んだ工程を飛ばす。
   const marker = await loadTriageMarker(env, id);
-  if (marker?.notified) {
+  if (marker?.notified && marker.handoffCommentRecorded !== false) {
     console.warn(
       'feedbackTriage: 処理済みのレポートを再受信したためスキップする',
       { reportId: id, issueNumber: marker.issueNumber }
@@ -1524,6 +1530,7 @@ export const processFeedbackMessage = async (
   let issueNumber = marker?.issueNumber ?? null;
   let issueUrl = marker?.issueUrl ?? null;
   let publicIssueUrl = marker?.publicIssueUrl ?? null;
+  let handoffCommentRecorded = marker?.handoffCommentRecorded ?? true;
 
   let handoff =
     marker?.handoff ??
@@ -1629,11 +1636,7 @@ ${reporterUid}
         ticketId: id,
       });
       publicIssueUrl = handoff.issueUrl ?? null;
-      await recordHandoffResult(
-        env,
-        issueNumber,
-        buildHandoffTraceBody(aiReport, handoff)
-      );
+      handoffCommentRecorded = false;
     } else if (handoff.repo) {
       handoff = {
         ...handoff,
@@ -1650,29 +1653,41 @@ ${reporterUid}
       ...handoff,
     });
 
-    // 起票済みであることを先に永続化する。この後で落ちても、再試行は通知から再開する。
+    // 起票済みであることを先に永続化する。この後で落ちても、再試行は未完了のコメント・通知から再開する。
     await saveTriageMarker(env, id, {
       issueNumber,
       issueUrl,
       publicIssueUrl,
       aiReport,
       handoff,
+      handoffCommentRecorded,
       triageFailed,
       needsSpamReview,
       notified: false,
     });
   }
 
-  const notified = await notifyDiscord(env, {
-    report,
-    aiReport,
-    shouldTagTriage,
-    categoryLabel,
-    triageLabel,
-    autoModeLabel,
-    issueUrl,
-    publicIssueUrl,
-  });
+  // 起票結果を先に保存し、コメント投稿だけを独立して再試行する。
+  if (!handoffCommentRecorded && issueNumber !== null) {
+    handoffCommentRecorded = await recordHandoffResult(
+      env,
+      issueNumber,
+      buildHandoffTraceBody(aiReport, handoff)
+    );
+  }
+
+  const notified =
+    marker?.notified ||
+    (await notifyDiscord(env, {
+      report,
+      aiReport,
+      shouldTagTriage,
+      categoryLabel,
+      triageLabel,
+      autoModeLabel,
+      issueUrl,
+      publicIssueUrl,
+    }));
 
   const markerSaved = await saveTriageMarker(env, id, {
     issueNumber,
@@ -1680,6 +1695,7 @@ ${reporterUid}
     publicIssueUrl,
     aiReport,
     handoff,
+    handoffCommentRecorded,
     triageFailed,
     needsSpamReview,
     // 通知に失敗したときは未通知のまま残す。再試行では起票を飛ばして通知だけ
@@ -1687,16 +1703,20 @@ ${reporterUid}
     notified,
   });
 
-  if (notified) return;
+  if (notified && handoffCommentRecorded) return;
 
   if (!markerSaved) {
     // マーカーを残せなかったので、再試行すると Issue を作り直してしまう。
-    // 通知を諦めて ack する（フィードバック自体は起票済みで失われない）。
+    // コメント・通知の再送を諦めて ack する（フィードバック自体は起票済み）。
     console.error(
-      'feedbackTriage: 通知に失敗したがマーカーも残せなかったため再試行しない',
+      'feedbackTriage: コメントまたは通知に失敗したがマーカーも残せなかったため再試行しない',
       { reportId: id, issueNumber }
     );
     return;
+  }
+
+  if (!handoffCommentRecorded) {
+    throw new Error(`Handoff comment failed: ${id}`);
   }
 
   // 起票済みなので、再試行してもマーカーを見て通知から再開する（重複起票しない）。

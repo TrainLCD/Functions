@@ -980,6 +980,74 @@ describe('processFeedbackMessage（再試行時の冪等化）', () => {
     expect(fetchMock.mock.calls).toHaveLength(1);
   });
 
+  it.each(['http', 'exception'])(
+    '結果コメント失敗を保存し、通知済みでもコメントだけ再送する: %s',
+    async (failure) => {
+      const msg = makeMessage();
+      const { env, store } = createEnv();
+      const handoff = {
+        status: 'created',
+        reason: '起票完了',
+        repo: 'TrainLCD/StationAPI',
+        issueUrl: 'https://github.com/TrainLCD/StationAPI/issues/99',
+      };
+      store.set(
+        triageMarkerKey(msg.report.id),
+        marker({ handoff, handoffCommentRecorded: false })
+      );
+      let fail = true;
+      const fetchMock = jest.fn(async (input: unknown) => {
+        if (String(input).endsWith('/comments')) {
+          if (fail && failure === 'exception')
+            throw new TypeError('network error');
+          return new Response('{}', { status: fail ? 503 : 201 });
+        }
+        return new Response(null, { status: 204 });
+      });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      await expect(processFeedbackMessage(msg, env)).rejects.toThrow(
+        'Handoff comment failed'
+      );
+      const saved = JSON.parse(
+        store.get(triageMarkerKey(msg.report.id)) ?? '{}'
+      );
+      expect(saved.notified).toBe(true);
+      expect(saved.handoffCommentRecorded).toBe(false);
+      expect(saved.handoff).toEqual(handoff);
+      fail = false;
+      await processFeedbackMessage(msg, env);
+      expect(
+        JSON.parse(store.get(triageMarkerKey(msg.report.id)) ?? '{}')
+          .handoffCommentRecorded
+      ).toBe(true);
+      expect(githubCalls(fetchMock)).toHaveLength(0);
+      expect(discordCalls(fetchMock)).toHaveLength(1);
+      expect(env.AI.run).not.toHaveBeenCalled();
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          String(url).endsWith('/comments')
+        )
+      ).toHaveLength(2);
+      fetchMock.mockClear();
+      await processFeedbackMessage(msg, env);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it('結果コメントが成功済みなら、通知再試行で重複投稿しない', async () => {
+    const msg = makeMessage();
+    const { env, store } = createEnv();
+    store.set(
+      triageMarkerKey(msg.report.id),
+      marker({ handoffCommentRecorded: true })
+    );
+    const fetchMock = jest.fn(async () => new Response(null, { status: 204 }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    await processFeedbackMessage(msg, env);
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(discordCalls(fetchMock)).toHaveLength(1);
+  });
+
   it('マーカー保存が一度失敗しても書き直し、throw しない', async () => {
     const msg = makeMessage();
     const { env, store } = createEnv();
@@ -1130,14 +1198,15 @@ describe('TypeSafe の判定を起票に反映する', () => {
   const run = async (
     env: TestEnv,
     typesafe: () => Response,
-    publicResponse?: () => Response
+    publicResponse?: () => Response,
+    commentResponse?: () => Response
   ) => {
     const created: Record<string, unknown>[] = [];
     global.fetch = jest.fn(async (input: unknown, init?: RequestInit) => {
       const url = String(input);
       if (url === TYPESAFE_API) return typesafe();
       if (url.endsWith('/issues/1/comments'))
-        return new Response('{}', { status: 201 });
+        return commentResponse?.() ?? new Response('{}', { status: 201 });
       if (
         url === 'https://api.github.com/repos/TrainLCD/StationAPI/issues' &&
         publicResponse
@@ -1200,6 +1269,35 @@ describe('TypeSafe の判定を起票に反映する', () => {
       if (status === 201) expect(saved.handoff.issueUrl).toBe(publicUrl);
     }
   );
+
+  it('初回の結果コメント失敗を起票結果とともに保存する', async () => {
+    const env = createEnv();
+    await expect(
+      run(
+        env,
+        () => new Response(typesafeBody(), { status: 200 }),
+        () =>
+          new Response(
+            JSON.stringify({
+              html_url: 'https://github.com/TrainLCD/StationAPI/issues/99',
+            }),
+            { status: 201 }
+          ),
+        () => new Response('unavailable', { status: 503 })
+      )
+    ).rejects.toThrow('Handoff comment failed');
+    const writes = env.STATE_KV.put.mock.calls.map((args: string[]) =>
+      JSON.parse(args[1])
+    );
+    expect(writes[0]).toMatchObject({
+      handoffCommentRecorded: false,
+      handoff: { status: 'created' },
+    });
+    expect(writes.at(-1)).toMatchObject({
+      handoffCommentRecorded: false,
+      notified: true,
+    });
+  });
 
   it('信頼度不足は管理 Issue に理由を残し、公開起票しない', async () => {
     const env = createEnv();
