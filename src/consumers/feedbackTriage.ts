@@ -717,14 +717,66 @@ export function resolvePublicIssueRepo(
     needsSpamReview?: boolean;
   }
 ): string | null {
-  if (opts.reportType !== 'feedback') return null;
-  if (opts.triageFailed || aiReport.isSpam) return null;
-  // スパム疑いで人手確認待ちのものを公開リポジトリに出さない
-  if (opts.needsSpamReview) return null;
-  if (!PUBLIC_ISSUE_CATEGORIES.includes(aiReport.category)) return null;
-  if (!aiReport.component) return null;
-  if (aiReport.componentConfidence < PUBLIC_ISSUE_MIN_CONFIDENCE) return null;
-  return COMPONENT_REPOS[aiReport.component];
+  return resolveHandoffDecision(aiReport, opts).repo;
+}
+
+export type HandoffTrace = {
+  status: 'pending' | 'skipped' | 'created' | 'failed';
+  reason: string;
+  repo: string | null;
+  httpStatus?: number;
+  issueUrl?: string;
+};
+
+/** 起票可否と見送り理由を同じ判定から導く。 */
+export function resolveHandoffDecision(
+  aiReport: AIReport,
+  opts: {
+    reportType: Report['reportType'];
+    triageFailed: boolean;
+    needsSpamReview?: boolean;
+  }
+): HandoffTrace {
+  const skip = (reason: string): HandoffTrace => ({
+    status: 'skipped',
+    reason,
+    repo: null,
+  });
+  if (opts.reportType !== 'feedback') return skip('対象外のレポート種別');
+  if (opts.triageFailed) return skip('トリアージ生成失敗');
+  if (aiReport.isSpam) return skip('スパム判定');
+  if (aiReport.reason === 'judgment-unavailable')
+    return skip('TypeSafe 判定取得失敗');
+  if (opts.needsSpamReview) return skip('人手確認待ち');
+  if (!PUBLIC_ISSUE_CATEGORIES.includes(aiReport.category))
+    return skip('対象外のカテゴリ');
+  if (!aiReport.component) return skip('原因コンポーネント未特定');
+  if (aiReport.componentConfidence < PUBLIC_ISSUE_MIN_CONFIDENCE)
+    return skip('原因コンポーネントの信頼度不足');
+  return {
+    status: 'pending',
+    reason: '起票対象',
+    repo: COMPONENT_REPOS[aiReport.component],
+  };
+}
+
+export function buildHandoffTraceBody(
+  aiReport: AIReport,
+  trace: HandoffTrace
+): string {
+  return [
+    '## ハンドオフ追跡',
+    `- 状態: ${trace.status}`,
+    `- 理由: ${trace.reason}`,
+    `- カテゴリ: ${aiReport.category}`,
+    `- 原因コンポーネント: ${aiReport.component ?? 'unknown'}`,
+    `- 原因コンポーネント信頼度: ${aiReport.componentConfidence}（閾値: ${PUBLIC_ISSUE_MIN_CONFIDENCE}）`,
+    `- 引き継ぎ先: ${trace.repo ?? 'なし'}`,
+    ...(trace.httpStatus !== undefined
+      ? [`- GitHub HTTP ステータス: ${trace.httpStatus}`]
+      : []),
+    ...(trace.issueUrl ? [`- 対応 Issue: ${trace.issueUrl}`] : []),
+  ].join('\n');
 }
 
 /**
@@ -758,14 +810,14 @@ export function buildPublicIssueBody(params: {
 }
 
 /**
- * 公開リポジトリへスタブ Issue を作成し、その URL を返す（失敗時は null）。
+ * 公開リポジトリへスタブ Issue を作成し、成功・失敗の追跡結果を返す。
  * ここで throw すると queue が再試行して非公開 Issue が重複作成されるため、
- * 失敗はログに留める。
+ * 失敗は管理 Issue・保存済みマーカー・ログに記録する。
  */
 async function createPublicIssue(
   env: Env,
   params: { repo: string; internalIssueNumber: number; ticketId: string }
-): Promise<string | null> {
+): Promise<HandoffTrace> {
   const { repo, internalIssueNumber, ticketId } = params;
   try {
     // ラベルは公開リポジトリ側に存在しないと自動生成されてしまうため付けない。
@@ -781,36 +833,59 @@ async function createPublicIssue(
         status: res.status,
         internalIssueNumber,
       });
-      return null;
+      return {
+        status: 'failed',
+        reason: 'GitHub 起票失敗',
+        repo,
+        httpStatus: res.status,
+      };
     }
     const created = (await res.json()) as { html_url: string };
-    return created.html_url;
+    if (typeof created.html_url !== 'string') {
+      return {
+        status: 'failed',
+        reason: 'GitHub 起票レスポンス不正（作成済みの可能性あり）',
+        repo,
+        httpStatus: res.status,
+      };
+    }
+    return {
+      status: 'created',
+      reason: '起票完了',
+      repo,
+      httpStatus: res.status,
+      issueUrl: created.html_url,
+    };
   } catch (err) {
     console.error('公開リポジトリへの起票に失敗', { repo, err });
-    return null;
+    return {
+      status: 'failed',
+      reason: '通信またはレスポンス解析失敗（作成済みの可能性あり）',
+      repo,
+    };
   }
 }
 
-/** 非公開の管理 Issue 側に、公開 Issue へのリンクをコメントで残す（失敗しても無視）。 */
-async function linkPublicIssue(
+/** 非公開の管理 Issue 側に起票結果を残す。投稿失敗時も結果は KV とログに残る。 */
+async function recordHandoffResult(
   env: Env,
   internalIssueNumber: number,
-  publicIssueUrl: string
+  body: string
 ): Promise<void> {
   try {
     const res = await githubPost(
       env,
       `${INTERNAL_REPO}/issues/${internalIssueNumber}/comments`,
-      { body: `公開リポジトリに対応 Issue を起票しました: ${publicIssueUrl}` }
+      { body }
     );
     if (res.status !== 201) {
-      console.error('管理 Issue への相互リンクコメントに失敗', {
+      console.error('管理 Issue へのハンドオフ結果コメントに失敗', {
         status: res.status,
         internalIssueNumber,
       });
     }
   } catch (err) {
-    console.error('管理 Issue への相互リンクコメントに失敗', { err });
+    console.error('管理 Issue へのハンドオフ結果コメントに失敗', { err });
   }
 }
 
@@ -835,6 +910,8 @@ export type TriageMarker = {
   /** 公開リポジトリに作成したスタブ Issue の URL（作っていなければ null） */
   publicIssueUrl: string | null;
   aiReport: AIReport;
+  /** 旧マーカーには存在しない。起票結果を通知再試行でも保持する。 */
+  handoff?: HandoffTrace;
   triageFailed: boolean;
   needsSpamReview: boolean;
   /** Discord 通知まで完了しているか */
@@ -906,6 +983,7 @@ async function loadTriageMarker(
     publicIssueUrl:
       typeof marker.publicIssueUrl === 'string' ? marker.publicIssueUrl : null,
     aiReport: marker.aiReport,
+    handoff: marker.handoff,
     triageFailed: marker.triageFailed === true,
     needsSpamReview: marker.needsSpamReview === true,
     notified: marker.notified === true,
@@ -1447,6 +1525,14 @@ export const processFeedbackMessage = async (
   let issueUrl = marker?.issueUrl ?? null;
   let publicIssueUrl = marker?.publicIssueUrl ?? null;
 
+  let handoff =
+    marker?.handoff ??
+    resolveHandoffDecision(aiReport, {
+      reportType,
+      triageFailed,
+      needsSpamReview,
+    });
+
   if (!marker) {
     const res = await githubPost(env, `${INTERNAL_REPO}/issues`, {
       title: aiReport.title ?? '要約未取得',
@@ -1460,6 +1546,8 @@ ${'```'}
 
 ## AIによる要約
 ${aiReport.summary}
+
+${buildHandoffTraceBody(aiReport, handoff).replace('## ハンドオフ追跡', '## ハンドオフ判定（起票時）')}
 
 ## チケットID
 ${id}
@@ -1534,21 +1622,33 @@ ${reporterUid}
     // 原因コンポーネントが特定できている場合のみ、該当の公開リポジトリにも起票する。
     // 公開側に載せるのは管理 Issue 番号とチケットIDだけで、フィードバックの内容は含めない。
     // 起票後は管理 Issue 側にもコメントでリンクを残し、双方向に追えるようにする。
-    const publicRepo = resolvePublicIssueRepo(aiReport, {
-      reportType,
-      triageFailed,
-      needsSpamReview,
-    });
-    if (publicRepo && issueNumber !== null) {
-      publicIssueUrl = await createPublicIssue(env, {
-        repo: publicRepo,
+    if (handoff.repo && issueNumber !== null) {
+      handoff = await createPublicIssue(env, {
+        repo: handoff.repo,
         internalIssueNumber: issueNumber,
         ticketId: id,
       });
-      if (publicIssueUrl) {
-        await linkPublicIssue(env, issueNumber, publicIssueUrl);
-      }
+      publicIssueUrl = handoff.issueUrl ?? null;
+      await recordHandoffResult(
+        env,
+        issueNumber,
+        buildHandoffTraceBody(aiReport, handoff)
+      );
+    } else if (handoff.repo) {
+      handoff = {
+        ...handoff,
+        status: 'failed',
+        reason: '管理 Issue 番号を取得できなかった',
+      };
     }
+    console.info('feedbackTriage: handoff', {
+      reportId: id,
+      internalIssueNumber: issueNumber,
+      component: aiReport.component,
+      componentConfidence: aiReport.componentConfidence,
+      threshold: PUBLIC_ISSUE_MIN_CONFIDENCE,
+      ...handoff,
+    });
 
     // 起票済みであることを先に永続化する。この後で落ちても、再試行は通知から再開する。
     await saveTriageMarker(env, id, {
@@ -1556,6 +1656,7 @@ ${reporterUid}
       issueUrl,
       publicIssueUrl,
       aiReport,
+      handoff,
       triageFailed,
       needsSpamReview,
       notified: false,
@@ -1578,6 +1679,7 @@ ${reporterUid}
     issueUrl,
     publicIssueUrl,
     aiReport,
+    handoff,
     triageFailed,
     needsSpamReview,
     // 通知に失敗したときは未通知のまま残す。再試行では起票を飛ばして通知だけ
