@@ -885,18 +885,28 @@ async function findPublicIssue(
   params: { repo: string; internalIssueNumber: number; ticketId: string }
 ): Promise<string | null> {
   const { repo, internalIssueNumber, ticketId } = params;
-  for (let page = 1; page <= 100; page++) {
-    const response = await fetch(
-      `https://api.github.com/repos/${repo}/issues?state=all&per_page=100&page=${page}`,
-      {
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${env.HANDOFF_ISSUE_TOKEN?.trim() || env.OCTOKIT_PAT}`,
-          'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'trainlcd-worker',
-        },
-      }
-    );
+  const endpoint = `https://api.github.com/repos/${repo}/issues`;
+  let nextUrl: string | null = `${endpoint}?state=all&per_page=100&page=1`;
+  const visited = new Set<string>();
+  while (nextUrl) {
+    const url: URL = new URL(nextUrl);
+    if (
+      `${url.origin}${url.pathname}` !== endpoint ||
+      url.username ||
+      url.password ||
+      visited.has(url.href)
+    ) {
+      throw new Error('Invalid GitHub pagination link');
+    }
+    visited.add(url.href);
+    const response: Response = await fetch(url.href, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${env.HANDOFF_ISSUE_TOKEN?.trim() || env.OCTOKIT_PAT}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'trainlcd-worker',
+      },
+    });
     if (!response.ok) throw await githubIssueError(response);
     const issues: unknown = await response.json();
     if (!Array.isArray(issues)) throw new Error('Invalid GitHub issue list');
@@ -911,10 +921,11 @@ async function findPublicIssue(
       )
         return issue.html_url;
     }
-    if (issues.length < 100) return null;
+    nextUrl =
+      response.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1] ??
+      null;
   }
-  // 全件を確認できなければ安全側で中断し、起票しない。
-  throw new Error('GitHub issue reconciliation page limit exceeded');
+  return null;
 }
 
 /** 非公開の管理 Issue 側に起票結果を残す。投稿失敗時も結果は KV とログに残る。 */
@@ -1705,14 +1716,14 @@ ${reporterUid}
           'feedbackTriage: 管理 Issue の保存に失敗したため公開起票を中止',
           { reportId: id, issueNumber }
         );
-        return;
+      } else {
+        handoff = await createPublicIssue(env, {
+          repo: handoff.repo,
+          internalIssueNumber: issueNumber,
+          ticketId: id,
+        });
+        publicIssueUrl = handoff.issueUrl ?? null;
       }
-      handoff = await createPublicIssue(env, {
-        repo: handoff.repo,
-        internalIssueNumber: issueNumber,
-        ticketId: id,
-      });
-      publicIssueUrl = handoff.issueUrl ?? null;
       handoffCommentRecorded = false;
     } else if (handoff.repo) {
       handoff = {
@@ -1829,6 +1840,7 @@ ${reporterUid}
     notified &&
     handoffCommentRecorded &&
     handoff.status !== 'failed' &&
+    handoff.status !== 'pending' &&
     (handoff.status !== 'created' || handoffSaved || markerSaved)
   )
     return;
@@ -1847,7 +1859,7 @@ ${reporterUid}
     throw new Error(`Handoff marker save failed: ${id}`);
   }
 
-  if (handoff.status === 'failed') {
+  if (handoff.status === 'failed' || handoff.status === 'pending') {
     throw new Error(`Handoff failed: ${id}`);
   }
 
