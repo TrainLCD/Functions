@@ -522,7 +522,10 @@ npx wrangler secret put HANDOFF_ISSUE_TOKEN --env production
 A failed handoff no longer counts as completed just because Discord succeeded.
 Explicit rejections (401/403/404/422/429) are retried from the saved marker,
 without recreating the private ticket, rerunning triage, or resending a successful
-Discord notification. An unchanged failure does not create another trace comment.
+Discord notification. Before retrying a public Issue, the consumer lists open and
+closed Issues and matches the management Issue title and ticket ID. A failed or
+incomplete lookup stops the attempt rather than creating another Issue. An
+unchanged failure does not create another trace comment.
 After the queue retry limit, the message remains in the DLQ for recovery after
 fixing the token. Network errors, 5xx, and malformed success responses may mean
 an Issue was already created, so these remain failed for manual reconciliation
@@ -530,8 +533,12 @@ without automatically posting another Issue.
 
 Existing failed markers can also resume when their original message is replayed
 within the 30-day marker TTL. Previously acknowledged messages are not restored
-to the queue automatically. Before replay, confirm that no stub was created
-manually; reconcile the marker if one exists to avoid duplicate handoffs.
+to the queue automatically. Manually created stubs with the same title and ticket ID are also reused during
+reconciliation. The private Issue and pending handoff are saved before public
+creation; if this initial save fails, public creation is stopped. If a public
+Issue succeeds but its result cannot be saved, the message is retried and the
+existing public Issue is reconciled. An earlier successful marker save remains
+valid even if the final save fails, so a failed handoff still reaches retry/DLQ.
 
 ## Maintenance CLI
 

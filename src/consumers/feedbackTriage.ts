@@ -879,6 +879,44 @@ async function createPublicIssue(
   }
 }
 
+/** 再試行前に公開 Issue を直接列挙する。検索インデックスの反映遅延に依存しない。 */
+async function findPublicIssue(
+  env: Env,
+  params: { repo: string; internalIssueNumber: number; ticketId: string }
+): Promise<string | null> {
+  const { repo, internalIssueNumber, ticketId } = params;
+  for (let page = 1; page <= 100; page++) {
+    const response = await fetch(
+      `https://api.github.com/repos/${repo}/issues?state=all&per_page=100&page=${page}`,
+      {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${env.HANDOFF_ISSUE_TOKEN?.trim() || env.OCTOKIT_PAT}`,
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'trainlcd-worker',
+        },
+      }
+    );
+    if (!response.ok) throw await githubIssueError(response);
+    const issues: unknown = await response.json();
+    if (!Array.isArray(issues)) throw new Error('Invalid GitHub issue list');
+    for (const issue of issues) {
+      if (
+        issue &&
+        !issue.pull_request &&
+        issue.title === buildPublicIssueTitle(internalIssueNumber) &&
+        typeof issue.body === 'string' &&
+        issue.body.split('\n').includes(`- チケットID: \`${ticketId}\``) &&
+        typeof issue.html_url === 'string'
+      )
+        return issue.html_url;
+    }
+    if (issues.length < 100) return null;
+  }
+  // 全件を確認できなければ安全側で中断し、起票しない。
+  throw new Error('GitHub issue reconciliation page limit exceeded');
+}
+
 /** 非公開の管理 Issue 側に起票結果を残す。投稿失敗時も結果は KV とログに残る。 */
 async function recordHandoffResult(
   env: Env,
@@ -1503,7 +1541,8 @@ export const processFeedbackMessage = async (
   if (
     marker?.notified &&
     marker.handoffCommentRecorded !== false &&
-    marker.handoff?.status !== 'failed'
+    marker.handoff?.status !== 'failed' &&
+    marker.handoff?.status !== 'pending'
   ) {
     console.warn(
       'feedbackTriage: 処理済みのレポートを再受信したためスキップする',
@@ -1544,6 +1583,8 @@ export const processFeedbackMessage = async (
     ? TRIAGE_LABELS[aiReport.triageLevel]
     : undefined;
 
+  let durableMarker = marker !== null;
+  let handoffSaved = marker?.handoff?.status === 'created';
   let issueNumber = marker?.issueNumber ?? null;
   let issueUrl = marker?.issueUrl ?? null;
   let publicIssueUrl = marker?.publicIssueUrl ?? null;
@@ -1647,6 +1688,25 @@ ${reporterUid}
     // 公開側に載せるのは管理 Issue 番号とチケットIDだけで、フィードバックの内容は含めない。
     // 起票後は管理 Issue 側にもコメントでリンクを残し、双方向に追えるようにする。
     if (handoff.repo && issueNumber !== null) {
+      // 公開起票前に管理 Issue と pending 状態を保存する。保存不能なら公開起票しない。
+      durableMarker = await saveTriageMarker(env, id, {
+        issueNumber,
+        issueUrl,
+        publicIssueUrl,
+        aiReport,
+        handoff,
+        handoffCommentRecorded,
+        triageFailed,
+        needsSpamReview,
+        notified: false,
+      });
+      if (!durableMarker) {
+        console.error(
+          'feedbackTriage: 管理 Issue の保存に失敗したため公開起票を中止',
+          { reportId: id, issueNumber }
+        );
+        return;
+      }
       handoff = await createPublicIssue(env, {
         repo: handoff.repo,
         internalIssueNumber: issueNumber,
@@ -1671,7 +1731,7 @@ ${reporterUid}
     });
 
     // 起票済みであることを先に永続化する。この後で落ちても、再試行は未完了のコメント・通知から再開する。
-    await saveTriageMarker(env, id, {
+    handoffSaved = await saveTriageMarker(env, id, {
       issueNumber,
       issueUrl,
       publicIssueUrl,
@@ -1682,30 +1742,41 @@ ${reporterUid}
       needsSpamReview,
       notified: false,
     });
+    durableMarker = durableMarker || handoffSaved;
   }
 
   // 明確に拒否されたリクエストだけを再送する。通信断・5xx・201 の解析失敗は
   // 作成済みの可能性があるため自動再起票せず、失敗状態のまま DLQ に残す。
   if (
     marker &&
-    handoff.status === 'failed' &&
+    (handoff.status === 'failed' || handoff.status === 'pending') &&
     handoff.repo &&
     issueNumber !== null &&
-    handoff.httpStatus !== undefined &&
-    [401, 403, 404, 422, 429].includes(handoff.httpStatus)
+    (handoff.status === 'pending' ||
+      (handoff.httpStatus !== undefined &&
+        [401, 403, 404, 422, 429].includes(handoff.httpStatus)))
   ) {
     const previous = handoff;
-    handoff = await createPublicIssue(env, {
+    const params = {
       repo: handoff.repo,
       internalIssueNumber: issueNumber,
       ticketId: id,
-    });
+    };
+    const existingUrl = await findPublicIssue(env, params);
+    handoff = existingUrl
+      ? {
+          status: 'created',
+          reason: '既存 Issue を照合して復旧',
+          repo: handoff.repo,
+          issueUrl: existingUrl,
+        }
+      : await createPublicIssue(env, params);
     publicIssueUrl = handoff.issueUrl ?? null;
     if (JSON.stringify(previous) !== JSON.stringify(handoff)) {
       handoffCommentRecorded = false;
     }
     // 成功した公開起票を、コメント・通知より先に保存する。
-    await saveTriageMarker(env, id, {
+    handoffSaved = await saveTriageMarker(env, id, {
       issueNumber,
       issueUrl,
       publicIssueUrl,
@@ -1754,9 +1825,15 @@ ${reporterUid}
     notified,
   });
 
-  if (notified && handoffCommentRecorded && handoff.status !== 'failed') return;
+  if (
+    notified &&
+    handoffCommentRecorded &&
+    handoff.status !== 'failed' &&
+    (handoff.status !== 'created' || handoffSaved || markerSaved)
+  )
+    return;
 
-  if (!markerSaved) {
+  if (!markerSaved && !durableMarker) {
     // マーカーを残せなかったので、再試行すると Issue を作り直してしまう。
     // コメント・通知の再送を諦めて ack する（フィードバック自体は起票済み）。
     console.error(
@@ -1764,6 +1841,10 @@ ${reporterUid}
       { reportId: id, issueNumber }
     );
     return;
+  }
+
+  if (handoff.status === 'created' && !handoffSaved && !markerSaved) {
+    throw new Error(`Handoff marker save failed: ${id}`);
   }
 
   if (handoff.status === 'failed') {
