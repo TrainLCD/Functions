@@ -508,8 +508,30 @@ the private ticket (`TrainLCD/Issues#<number>` and the ticket ID), and the
 private Issue gets a comment pointing at the public one so both sides are
 traceable.
 
-`OCTOKIT_PAT` therefore needs write access to those four repos on top of
-`TrainLCD/Issues`.
+Public handoff uses the optional Worker secret `HANDOFF_ISSUE_TOKEN`, falling
+back to `OCTOKIT_PAT` when it is empty or unset. The selected token needs
+**Issues: Read and write** on all four destination repos. `OCTOKIT_PAT` still
+needs access to `TrainLCD/Issues` for the private ticket and result comments.
+GitHub Actions secrets are not automatically available to the Worker; install
+the token separately for each environment, for example:
+
+```bash
+npx wrangler secret put HANDOFF_ISSUE_TOKEN --env production
+```
+
+A failed handoff no longer counts as completed just because Discord succeeded.
+Explicit rejections (401/403/404/422/429) are retried from the saved marker,
+without recreating the private ticket, rerunning triage, or resending a successful
+Discord notification. An unchanged failure does not create another trace comment.
+After the queue retry limit, the message remains in the DLQ for recovery after
+fixing the token. Network errors, 5xx, and malformed success responses may mean
+an Issue was already created, so these remain failed for manual reconciliation
+without automatically posting another Issue.
+
+Existing failed markers can also resume when their original message is replayed
+within the 30-day marker TTL. Previously acknowledged messages are not restored
+to the queue automatically. Before replay, confirm that no stub was created
+manually; reconcile the marker if one exists to avoid duplicate handoffs.
 
 ## Maintenance CLI
 

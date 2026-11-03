@@ -961,23 +961,103 @@ describe('processFeedbackMessage（再試行時の冪等化）', () => {
     ).toBe(true);
   });
 
-  it('通知再試行でも記録済みのハンドオフ失敗を保持する', async () => {
+  it('403 の起票を専用トークンで再試行し、通知と管理 Issue は重複させない', async () => {
     const msg = makeMessage();
     const { env, store } = createEnv();
-    const handoff = {
-      status: 'failed',
-      reason: 'GitHub 起票失敗',
-      repo: 'TrainLCD/StationAPI',
-      httpStatus: 403,
-    };
-    store.set(triageMarkerKey(msg.report.id), marker({ handoff }));
-    const fetchMock = jest.fn(async () => new Response(null, { status: 204 }));
+    env.HANDOFF_ISSUE_TOKEN = 'handoff-pat';
+    store.set(
+      triageMarkerKey(msg.report.id),
+      marker({
+        notified: true,
+        handoff: {
+          status: 'failed',
+          reason: 'GitHub 起票失敗',
+          repo: 'TrainLCD/StationAPI',
+          httpStatus: 403,
+        },
+      })
+    );
+    const publicUrl = 'https://github.com/TrainLCD/StationAPI/issues/99';
+    const fetchMock = jest.fn(
+      async (input: unknown) =>
+        new Response(
+          JSON.stringify(
+            String(input).endsWith('/comments') ? {} : { html_url: publicUrl }
+          ),
+          { status: 201 }
+        )
+    );
     global.fetch = fetchMock as unknown as typeof fetch;
     await processFeedbackMessage(msg, env);
+    expect(githubCalls(fetchMock)).toHaveLength(0);
+    expect(discordCalls(fetchMock)).toHaveLength(0);
+    expect(env.AI.run).not.toHaveBeenCalled();
+    const requests = (fetchMock as jest.Mock).mock.calls;
+    expect(requests[0][1].headers.Authorization).toBe('Bearer handoff-pat');
+    expect(requests[1][1].headers.Authorization).toBe('Bearer pat');
+    expect(
+      JSON.parse(store.get(triageMarkerKey(msg.report.id)) ?? '{}')
+    ).toMatchObject({
+      handoff: { status: 'created' },
+      publicIssueUrl: publicUrl,
+    });
+    fetchMock.mockClear();
+    await processFeedbackMessage(msg, env);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, 201, 503])(
+    '作成済みの可能性がある失敗を再起票せず再試行キューに残す: %s',
+    async (httpStatus) => {
+      const msg = makeMessage();
+      const { env, store } = createEnv();
+      store.set(
+        triageMarkerKey(msg.report.id),
+        marker({
+          notified: true,
+          handoff: {
+            status: 'failed',
+            reason: '作成済みの可能性あり',
+            repo: 'TrainLCD/StationAPI',
+            httpStatus,
+          },
+        })
+      );
+      const fetchMock = jest.fn();
+      global.fetch = fetchMock;
+      await expect(processFeedbackMessage(msg, env)).rejects.toThrow(
+        'Handoff failed'
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it('403 が続いても結果コメントを重複させず、失敗を返す', async () => {
+    const msg = makeMessage();
+    const { env, store } = createEnv();
+    store.set(
+      triageMarkerKey(msg.report.id),
+      marker({
+        notified: true,
+        handoff: {
+          status: 'failed',
+          reason:
+            'GitHub 起票拒否（トークンの権限・有効期限またはレート制限を確認）',
+          repo: 'TrainLCD/StationAPI',
+          httpStatus: 403,
+        },
+      })
+    );
+    const fetchMock = jest.fn(async () => new Response('{}', { status: 403 }));
+    global.fetch = fetchMock;
+    await expect(processFeedbackMessage(msg, env)).rejects.toThrow(
+      'Handoff failed'
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(
       JSON.parse(store.get(triageMarkerKey(msg.report.id)) ?? '{}').handoff
-    ).toEqual(handoff);
-    expect(fetchMock.mock.calls).toHaveLength(1);
+        .httpStatus
+    ).toBe(403);
   });
 
   it.each(['http', 'exception'])(
@@ -1207,11 +1287,16 @@ describe('TypeSafe の判定を起票に反映する', () => {
       if (url === TYPESAFE_API) return typesafe();
       if (url.endsWith('/issues/1/comments'))
         return commentResponse?.() ?? new Response('{}', { status: 201 });
-      if (
-        url === 'https://api.github.com/repos/TrainLCD/StationAPI/issues' &&
-        publicResponse
-      )
-        return publicResponse();
+      if (url === 'https://api.github.com/repos/TrainLCD/StationAPI/issues')
+        return (
+          publicResponse?.() ??
+          new Response(
+            JSON.stringify({
+              html_url: 'https://github.com/TrainLCD/StationAPI/issues/99',
+            }),
+            { status: 201 }
+          )
+        );
       if (url === ISSUES_API) {
         created.push(JSON.parse(String(init?.body)));
         return new Response(
@@ -1238,7 +1323,7 @@ describe('TypeSafe の判定を起票に反映する', () => {
     async (status) => {
       const env = createEnv();
       const publicUrl = 'https://github.com/TrainLCD/StationAPI/issues/99';
-      const created = await run(
+      const result = run(
         env,
         () => new Response(typesafeBody(), { status: 200 }),
         () =>
@@ -1250,7 +1335,15 @@ describe('TypeSafe の判定を起票に反映する', () => {
             { status }
           )
       );
-      expect(String(created[0]?.body)).toContain(
+      if (status === 403) {
+        await expect(result).rejects.toThrow('Handoff failed');
+      } else {
+        await result;
+      }
+      const internalCall = (global.fetch as jest.Mock).mock.calls.find(
+        ([url]) => url === ISSUES_API
+      );
+      expect(JSON.parse(String(internalCall?.[1]?.body)).body).toContain(
         '原因コンポーネント信頼度: 0.86（閾値: 0.7）'
       );
       const fetchMock = global.fetch as jest.Mock;
