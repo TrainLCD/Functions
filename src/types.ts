@@ -58,6 +58,8 @@ export interface Env {
   /** App Store Connect API 鍵 JSON 文字列 ({keyId, issuerId, privateKey}) */
   APPSTORE_CONNECT_KEY: string;
   OCTOKIT_PAT: string;
+  /** 公開先の Issues write を持つ PAT。未設定時は OCTOKIT_PAT を使用 */
+  HANDOFF_ISSUE_TOKEN?: string;
   DISCORD_CS_WEBHOOK_URL: string;
   DISCORD_CRASH_WEBHOOK_URL: string;
   DISCORD_REVIEW_WEBHOOK_URL: string;

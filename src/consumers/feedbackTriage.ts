@@ -687,13 +687,18 @@ function responseLength(resp: unknown): number {
 // ---- GitHub Issue 作成 ----
 
 /** GitHub REST API への POST（Issue 作成・コメント投稿の共通処理）。 */
-function githubPost(env: Env, path: string, body: unknown): Promise<Response> {
+function githubPost(
+  env: Env,
+  path: string,
+  body: unknown,
+  token = env.OCTOKIT_PAT
+): Promise<Response> {
   return fetch(`https://api.github.com/repos/${path}`, {
     method: 'post',
     headers: {
       Accept: 'application/vnd.github+json',
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${env.OCTOKIT_PAT ?? ''}`,
+      Authorization: `Bearer ${token ?? ''}`,
       'X-GitHub-Api-Version': '2022-11-28',
       'User-Agent': 'trainlcd-worker',
     },
@@ -822,11 +827,16 @@ async function createPublicIssue(
   try {
     // ラベルは公開リポジトリ側に存在しないと自動生成されてしまうため付けない。
     // 分類・優先度は非公開の管理 Issue 側のラベルで管理する。
-    const res = await githubPost(env, `${repo}/issues`, {
-      title: buildPublicIssueTitle(internalIssueNumber),
-      body: buildPublicIssueBody({ internalIssueNumber, ticketId }),
-      assignees: ['TinyKitten'],
-    });
+    const res = await githubPost(
+      env,
+      `${repo}/issues`,
+      {
+        title: buildPublicIssueTitle(internalIssueNumber),
+        body: buildPublicIssueBody({ internalIssueNumber, ticketId }),
+        assignees: ['TinyKitten'],
+      },
+      env.HANDOFF_ISSUE_TOKEN?.trim() || env.OCTOKIT_PAT
+    );
     if (res.status !== 201) {
       console.error('公開リポジトリへの起票に失敗', {
         repo,
@@ -835,7 +845,10 @@ async function createPublicIssue(
       });
       return {
         status: 'failed',
-        reason: 'GitHub 起票失敗',
+        reason:
+          res.status === 401 || res.status === 403
+            ? 'GitHub 起票拒否（トークンの権限・有効期限またはレート制限を確認）'
+            : 'GitHub 起票失敗',
         repo,
         httpStatus: res.status,
       };
@@ -864,6 +877,55 @@ async function createPublicIssue(
       repo,
     };
   }
+}
+
+/** 再試行前に公開 Issue を直接列挙する。検索インデックスの反映遅延に依存しない。 */
+async function findPublicIssue(
+  env: Env,
+  params: { repo: string; internalIssueNumber: number; ticketId: string }
+): Promise<string | null> {
+  const { repo, internalIssueNumber, ticketId } = params;
+  const endpoint = `https://api.github.com/repos/${repo}/issues`;
+  let nextUrl: string | null = `${endpoint}?state=all&per_page=100&page=1`;
+  const visited = new Set<string>();
+  while (nextUrl) {
+    const url: URL = new URL(nextUrl);
+    if (
+      `${url.origin}${url.pathname}` !== endpoint ||
+      url.username ||
+      url.password ||
+      visited.has(url.href)
+    ) {
+      throw new Error('Invalid GitHub pagination link');
+    }
+    visited.add(url.href);
+    const response: Response = await fetch(url.href, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${env.HANDOFF_ISSUE_TOKEN?.trim() || env.OCTOKIT_PAT}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'trainlcd-worker',
+      },
+    });
+    if (!response.ok) throw await githubIssueError(response);
+    const issues: unknown = await response.json();
+    if (!Array.isArray(issues)) throw new Error('Invalid GitHub issue list');
+    for (const issue of issues) {
+      if (
+        issue &&
+        !issue.pull_request &&
+        issue.title === buildPublicIssueTitle(internalIssueNumber) &&
+        typeof issue.body === 'string' &&
+        issue.body.split('\n').includes(`- チケットID: \`${ticketId}\``) &&
+        typeof issue.html_url === 'string'
+      )
+        return issue.html_url;
+    }
+    nextUrl =
+      response.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1] ??
+      null;
+  }
+  return null;
 }
 
 /** 非公開の管理 Issue 側に起票結果を残す。投稿失敗時も結果は KV とログに残る。 */
@@ -1487,7 +1549,12 @@ export const processFeedbackMessage = async (
   // 再試行や DLQ からの再投入で同じレポートが流れてきたとき、Issue を重複起票しない
   // ように、処理済みマーカーを見て済んだ工程を飛ばす。
   const marker = await loadTriageMarker(env, id);
-  if (marker?.notified && marker.handoffCommentRecorded !== false) {
+  if (
+    marker?.notified &&
+    marker.handoffCommentRecorded !== false &&
+    marker.handoff?.status !== 'failed' &&
+    marker.handoff?.status !== 'pending'
+  ) {
     console.warn(
       'feedbackTriage: 処理済みのレポートを再受信したためスキップする',
       { reportId: id, issueNumber: marker.issueNumber }
@@ -1527,6 +1594,8 @@ export const processFeedbackMessage = async (
     ? TRIAGE_LABELS[aiReport.triageLevel]
     : undefined;
 
+  let durableMarker = marker !== null;
+  let handoffSaved = marker?.handoff?.status === 'created';
   let issueNumber = marker?.issueNumber ?? null;
   let issueUrl = marker?.issueUrl ?? null;
   let publicIssueUrl = marker?.publicIssueUrl ?? null;
@@ -1630,12 +1699,31 @@ ${reporterUid}
     // 公開側に載せるのは管理 Issue 番号とチケットIDだけで、フィードバックの内容は含めない。
     // 起票後は管理 Issue 側にもコメントでリンクを残し、双方向に追えるようにする。
     if (handoff.repo && issueNumber !== null) {
-      handoff = await createPublicIssue(env, {
-        repo: handoff.repo,
-        internalIssueNumber: issueNumber,
-        ticketId: id,
+      // 公開起票前に管理 Issue と pending 状態を保存する。保存不能なら公開起票しない。
+      durableMarker = await saveTriageMarker(env, id, {
+        issueNumber,
+        issueUrl,
+        publicIssueUrl,
+        aiReport,
+        handoff,
+        handoffCommentRecorded,
+        triageFailed,
+        needsSpamReview,
+        notified: false,
       });
-      publicIssueUrl = handoff.issueUrl ?? null;
+      if (!durableMarker) {
+        console.error(
+          'feedbackTriage: 管理 Issue の保存に失敗したため公開起票を中止',
+          { reportId: id, issueNumber }
+        );
+      } else {
+        handoff = await createPublicIssue(env, {
+          repo: handoff.repo,
+          internalIssueNumber: issueNumber,
+          ticketId: id,
+        });
+        publicIssueUrl = handoff.issueUrl ?? null;
+      }
       handoffCommentRecorded = false;
     } else if (handoff.repo) {
       handoff = {
@@ -1654,7 +1742,7 @@ ${reporterUid}
     });
 
     // 起票済みであることを先に永続化する。この後で落ちても、再試行は未完了のコメント・通知から再開する。
-    await saveTriageMarker(env, id, {
+    handoffSaved = await saveTriageMarker(env, id, {
       issueNumber,
       issueUrl,
       publicIssueUrl,
@@ -1664,6 +1752,51 @@ ${reporterUid}
       triageFailed,
       needsSpamReview,
       notified: false,
+    });
+    durableMarker = durableMarker || handoffSaved;
+  }
+
+  // 明確に拒否されたリクエストだけを再送する。通信断・5xx・201 の解析失敗は
+  // 作成済みの可能性があるため自動再起票せず、失敗状態のまま DLQ に残す。
+  if (
+    marker &&
+    (handoff.status === 'failed' || handoff.status === 'pending') &&
+    handoff.repo &&
+    issueNumber !== null &&
+    (handoff.status === 'pending' ||
+      (handoff.httpStatus !== undefined &&
+        [401, 403, 404, 422, 429].includes(handoff.httpStatus)))
+  ) {
+    const previous = handoff;
+    const params = {
+      repo: handoff.repo,
+      internalIssueNumber: issueNumber,
+      ticketId: id,
+    };
+    const existingUrl = await findPublicIssue(env, params);
+    handoff = existingUrl
+      ? {
+          status: 'created',
+          reason: '既存 Issue を照合して復旧',
+          repo: handoff.repo,
+          issueUrl: existingUrl,
+        }
+      : await createPublicIssue(env, params);
+    publicIssueUrl = handoff.issueUrl ?? null;
+    if (JSON.stringify(previous) !== JSON.stringify(handoff)) {
+      handoffCommentRecorded = false;
+    }
+    // 成功した公開起票を、コメント・通知より先に保存する。
+    handoffSaved = await saveTriageMarker(env, id, {
+      issueNumber,
+      issueUrl,
+      publicIssueUrl,
+      aiReport,
+      handoff,
+      handoffCommentRecorded,
+      triageFailed,
+      needsSpamReview,
+      notified: marker.notified,
     });
   }
 
@@ -1703,9 +1836,16 @@ ${reporterUid}
     notified,
   });
 
-  if (notified && handoffCommentRecorded) return;
+  if (
+    notified &&
+    handoffCommentRecorded &&
+    handoff.status !== 'failed' &&
+    handoff.status !== 'pending' &&
+    (handoff.status !== 'created' || handoffSaved || markerSaved)
+  )
+    return;
 
-  if (!markerSaved) {
+  if (!markerSaved && !durableMarker) {
     // マーカーを残せなかったので、再試行すると Issue を作り直してしまう。
     // コメント・通知の再送を諦めて ack する（フィードバック自体は起票済み）。
     console.error(
@@ -1713,6 +1853,14 @@ ${reporterUid}
       { reportId: id, issueNumber }
     );
     return;
+  }
+
+  if (handoff.status === 'created' && !handoffSaved && !markerSaved) {
+    throw new Error(`Handoff marker save failed: ${id}`);
+  }
+
+  if (handoff.status === 'failed' || handoff.status === 'pending') {
+    throw new Error(`Handoff failed: ${id}`);
   }
 
   if (!handoffCommentRecorded) {
