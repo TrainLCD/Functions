@@ -31,3 +31,24 @@ This repository uses git-flow: `dev` is the development branch and `master` the 
 ## Security & Configuration
 
 Never commit `.dev.vars`, `.secrets.env`, API keys, tokens, or service-account JSON. Start from `.secrets.env.example`, use Wrangler secrets for deployed environments, and review both development and production sections of `wrangler.jsonc` when changing bindings.
+
+## Investigate Impact Before Changing Code
+
+- **Finish the relevant investigation before editing application code.** Record the requested outcome, existing behavior and its evidence, dependencies, expected impact, and a concrete validation plan in the task discussion before implementation. Carry that record into the PR. A promise to investigate later is not a substitute.
+- **Trace the complete data flow.** Follow producers through callers, indirect consumers, shared state and caches to displayed output or external effects. Check cache keys and ordering, prefetch versus on-demand requests, and what happens after user actions, retries, or failures. A missing prop or a single unused reference does not prove that data is unused. Treat similar UI or API paths separately until their dependencies are verified.
+- **Define the impact and tests first.** Identify what will change and what must remain unchanged for normal cases, boundaries, empty or missing data, and failures. Map each preservation claim to a specific test or inspection. For performance work, distinguish fewer requests or smaller payloads from measured latency; do not promise a speedup without measurement.
+- **Resolve material unknowns before dependent changes.** Investigate facts available in the repository or connected sources instead of asking the user to do that work. If intended behavior remains ambiguous, explain the evidence and concrete alternatives, then ask before implementing the dependent change. Continue independent investigation. Do not treat agent-written issues or review suggestions as authorization to change behavior.
+- **Preserve the approved contract.** Do not hide missing data by dropping items, or change filters, search criteria, ordering, selection priorities, fallbacks, or error behavior without authorization. Do not weaken existing tests to make a new implementation pass. Reuse prior authorization rather than asking again for the same scope.
+- **Report evidence precisely.** Separate planned checks from completed checks and automated tests from real UI or deployed-service verification. Do not call behavior unchanged, data unused, or a fix verified until the relevant path has been checked. State any remaining validation limits in the PR.
+
+For this Worker, trace HTTP, queue, and scheduled entry points through authentication, integrations, retries, and KV/R2 caches to responses and external effects. Check development and production configuration, idempotency, and client compatibility where affected. Use mocked boundaries for tests; do not trigger paid AI calls or live notifications merely to validate documentation or unrelated changes.
+
+### Example: TTS request and shared cache
+
+Use this as a starting point, not an exhaustive dependency map; re-check the current code and follow the paths affected by the task.
+
+- `src/index.ts` routes `POST /tts` through `withCallable` to `handleTts` in `src/routes/tts.ts`. It verifies the session via `src/lib/auth/session.ts`, parses the requested languages, and normalizes English text before computing the cache ID.
+- `getTtsConfig` reads `TTS_KV["config:tts"]` through an in-memory cache. `src/utils/ttsVoice.ts` resolves allowed voices from request, KV, environment, then built-in defaults. `computeId` includes the resolved voices, normalized text, speed, pitch, format, and hash version; trace these inputs before changing cache reuse.
+- `handleTts` reads `TTS_KV["voice:<id>"]`, then follows its language-specific paths into `TTS_BUCKET`. A complete hit returns base64 audio through `callableSuccess`; missing audio or an R2 read failure falls through to `synthesizeSpeech` in `src/lib/google/tts.ts` for the requested languages. Do not assume KV read failures use the same fallback.
+- After synthesis, `ctx.waitUntil` calls `writeTtsCache` in `src/lib/ttsCache.ts`: R2 audio writes finish before KV metadata is written for later requests. Cache-write errors are logged independently of the audio response; this path does not use a queue.
+- For changes along this path, inspect `src/routes/tts.test.ts` for cache-ID and input cases and `src/lib/ttsCache.test.ts` for saved languages and metadata. Add mocked checks for affected behavior those tests do not cover, especially cache-hit/miss and failure branches; check the development and production TTS bindings in `wrangler.jsonc`.
