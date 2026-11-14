@@ -42,3 +42,13 @@ Never commit `.dev.vars`, `.secrets.env`, API keys, tokens, or service-account J
 - **Report evidence precisely.** Separate planned checks from completed checks and automated tests from real UI or deployed-service verification. Do not call behavior unchanged, data unused, or a fix verified until the relevant path has been checked. State any remaining validation limits in the PR.
 
 For this Worker, trace HTTP, queue, and scheduled entry points through authentication, integrations, retries, and KV/R2 caches to responses and external effects. Check development and production configuration, idempotency, and client compatibility where affected. Use mocked boundaries for tests; do not trigger paid AI calls or live notifications merely to validate documentation or unrelated changes.
+
+### Example: TTS request and shared cache
+
+Use this as a starting point, not an exhaustive dependency map; re-check the current code and follow the paths affected by the task.
+
+- `src/index.ts` routes `POST /tts` through `withCallable` to `handleTts` in `src/routes/tts.ts`. It verifies the session via `src/lib/auth/session.ts`, parses the requested languages, and normalizes English text before computing the cache ID.
+- `getTtsConfig` reads `TTS_KV["config:tts"]` through an in-memory cache. `src/utils/ttsVoice.ts` resolves allowed voices from request, KV, environment, then built-in defaults. `computeId` includes the resolved voices, normalized text, speed, pitch, format, and hash version; trace these inputs before changing cache reuse.
+- `handleTts` reads `TTS_KV["voice:<id>"]`, then follows its language-specific paths into `TTS_BUCKET`. A complete hit returns base64 audio through `callableSuccess`; missing audio or an R2 read failure falls through to `synthesizeSpeech` in `src/lib/google/tts.ts` for the requested languages. Do not assume KV read failures use the same fallback.
+- After synthesis, `ctx.waitUntil` calls `writeTtsCache` in `src/lib/ttsCache.ts`: R2 audio writes finish before KV metadata is written for later requests. Cache-write errors are logged independently of the audio response; this path does not use a queue.
+- For changes along this path, inspect `src/routes/tts.test.ts` for cache-ID and input cases and `src/lib/ttsCache.test.ts` for saved languages and metadata. Add mocked checks for affected behavior those tests do not cover, especially cache-hit/miss and failure branches; check the development and production TTS bindings in `wrangler.jsonc`.
