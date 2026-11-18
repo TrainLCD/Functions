@@ -2,6 +2,11 @@ import { bytesToBase64 } from '../crypto';
 
 export const MODEL = 'eleven_v4';
 
+const conductorVoiceTag = {
+  ja: '[若い女性車掌の声]',
+  en: '[voice of a young female train conductor]',
+} as const;
+
 const formats = {
   mp3: ['mp3_44100_128', 'audio/mpeg'],
   wav: ['wav_24000', 'audio/wav'],
@@ -35,7 +40,7 @@ export const synthesizeSpeech = async (params: {
     method: 'POST',
     headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      text,
+      text: `${conductorVoiceTag[languageCode]} ${text}`,
       model_id: MODEL,
       language_code: languageCode,
       voice_settings: { speed: opts.speed ?? 1 },

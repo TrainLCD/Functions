@@ -37,7 +37,8 @@ interface VoiceCacheMeta {
 }
 
 const TEXT_BYTE_LIMIT = 4000;
-const HASH_VERSION = 15;
+// 車掌の音声タグを付ける前の合成結果と区別する。
+const HASH_VERSION = 16;
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;
