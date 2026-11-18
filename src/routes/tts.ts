@@ -1,4 +1,4 @@
-/** POST /tts — Google Cloud TTS で音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
+/** POST /tts — Eleven v4 で音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
 import { verifySessionToken } from '../lib/auth/session';
 import {
   CallableError,
@@ -6,44 +6,23 @@ import {
   parseCallableData,
 } from '../lib/callable';
 import { bytesToBase64, sha256Hex } from '../lib/crypto';
-import {
-  normalizeResponseFormat,
-  parseClientSpeed,
-  parsePitch,
-  parseSpeed,
-  synthesizeSpeech,
-  type TtsOptions,
-} from '../lib/google/tts';
+import { MODEL, normalizeResponseFormat, synthesizeSpeech } from '../lib/elevenlabs/tts';
+import { parseClientSpeed, parseSpeed } from '../lib/google/tts';
 import { writeTtsCache } from '../lib/ttsCache';
 import type { Env } from '../types';
 import { normalizeRomanText } from '../utils/normalize';
 import { stripSsml, utf8ByteLength } from '../utils/ssml';
-import {
-  languageCodeFromVoiceName,
-  resolveGoogleVoiceName,
-} from '../utils/ttsVoice';
-
-/**
- * model / instructions* は OpenAI(gpt-4o-mini-tts) 時代のフィールド。Cloud TTS の
- * Standard 系ボイスにはモデル指定も読み方のプロンプト指示も無いため受け取っても
- * 使わないが、旧バージョンのアプリが送ってきても壊れないよう型としては残す。
- */
 interface TtsRequest {
   textJa?: unknown;
   textEn?: unknown;
-  jaVoiceName?: unknown;
-  enVoiceName?: unknown;
   // アナウンス設定で選んだ読み上げ速度。プリセット外の値は無視される
   speed?: unknown;
 }
 
 interface TtsConfig {
-  jaVoiceName?: string;
-  enVoiceName?: string;
+  jaVoiceId?: string;
+  enVoiceId?: string;
 }
-
-/** キャッシュメタに残す合成エンジン名（find-tts-cache の表示用）。 */
-const TTS_ENGINE = 'google-cloud-tts';
 
 interface VoiceCacheMeta {
   pathJa?: string;
@@ -53,9 +32,7 @@ interface VoiceCacheMeta {
 }
 
 const TEXT_BYTE_LIMIT = 4000;
-// 合成エンジンの入れ替え（OpenAI → Google Cloud TTS）で同じ入力でも音声が変わるため、
-// 旧キャッシュへヒットしないよう版を上げる
-const HASH_VERSION = 14;
+const HASH_VERSION = 15;
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;
@@ -149,40 +126,30 @@ export const handleTts = async (
     );
   }
 
-  if (!env.GOOGLE_TTS_SA_KEY) {
+  if (!env.ELEVENLABS_API_KEY) {
     throw new CallableError(
       'failed-precondition',
-      'GOOGLE_TTS_SA_KEY is not configured'
+      'ELEVENLABS_API_KEY is not configured'
     );
   }
 
   const ttsConfig = await getTtsConfig(env);
-  const jaVoiceName = resolveGoogleVoiceName(
-    data.jaVoiceName,
-    ttsConfig.jaVoiceName,
-    env.TTS_JA_VOICE_NAME,
-    'ja'
-  );
-  const enVoiceName = resolveGoogleVoiceName(
-    data.enVoiceName,
-    ttsConfig.enVoiceName,
-    env.TTS_EN_VOICE_NAME,
-    'en'
-  );
+  const jaVoiceName = ttsConfig.jaVoiceId || env.TTS_JA_VOICE_ID;
+  const enVoiceName = ttsConfig.enVoiceId || env.TTS_EN_VOICE_ID;
 
   // 環境変数は文字列なので、送信前に正規化した値を作る。この正規化後の値を
   // そのままキャッシュキーにも使い、設定変更が確実に別 ID になるようにする。
   const responseFormat = normalizeResponseFormat(env.TTS_RESPONSE_FORMAT);
   // 速度はアプリの設定を優先し、未指定・プリセット外なら環境変数の既定値を使う。
   // 速度は computeId に含まれるため、選択が変わればキャッシュも自動的に分かれる。
-  const speed = parseClientSpeed(data.speed) ?? parseSpeed(env.TTS_SPEED);
-  const pitch = parsePitch(env.TTS_PITCH);
-  const ttsOptions: TtsOptions = { responseFormat, speed, pitch };
+  const configuredSpeed = parseSpeed(env.TTS_SPEED) ?? 1;
+  const speed = parseClientSpeed(data.speed) ?? (configuredSpeed >= 0.7 && configuredSpeed <= 1.2 ? configuredSpeed : 1);
+  const ttsOptions = { responseFormat, speed };
 
   const id = await computeId({
     enVoiceName,
     jaVoiceName,
-    pitch: pitch ?? null,
+    pitch: null,
     responseFormat,
     speed: speed ?? null,
     textEn,
@@ -228,13 +195,13 @@ export const handleTts = async (
     }
   }
 
-  // --- 合成（Google Cloud TTS） ---
+  // --- 合成（Eleven v4） ---
   // 要求された言語だけ合成する（合成は文字数課金）
   const [jaAudio, enAudio] = await Promise.all([
     wantsJa
       ? synthesizeSpeech({
-          saKeyJson: env.GOOGLE_TTS_SA_KEY,
-          languageCode: languageCodeFromVoiceName(jaVoiceName),
+          apiKey: env.ELEVENLABS_API_KEY,
+          languageCode: 'ja',
           voiceName: jaVoiceName,
           text: textJa,
           opts: ttsOptions,
@@ -242,8 +209,8 @@ export const handleTts = async (
       : null,
     wantsEn
       ? synthesizeSpeech({
-          saKeyJson: env.GOOGLE_TTS_SA_KEY,
-          languageCode: languageCodeFromVoiceName(enVoiceName),
+          apiKey: env.ELEVENLABS_API_KEY,
+          languageCode: 'en',
           voiceName: enVoiceName,
           text: textEn,
           opts: ttsOptions,
@@ -263,7 +230,7 @@ export const handleTts = async (
         enAudioMimeType: enAudio?.mimeType,
         textJa,
         textEn,
-        model: TTS_ENGINE,
+        model: MODEL,
         voiceJa: wantsJa ? jaVoiceName : undefined,
         voiceEn: wantsEn ? enVoiceName : undefined,
       },

@@ -61,18 +61,9 @@
     // 調整したら、エイリアスではなく "jev-1.13.0" のようにバージョンを固定する
     // （エイリアスは新リリースで指す先が動くため）。
     "TYPESAFE_MODEL": "jev-latest",
-    // --- TTS（/tts）---
-    // Google Cloud TTS。ボイス名はロケール込みで、日英それぞれに指定する。
-    // 既定は旧 Google TTS 実装（Firebase Functions 時代）と同じ組み合わせ。
-    // Standard 系は端末内蔵 TTS と同水準の音質で単価も最安。より高品質にするなら
-    // 末尾記号はそのまま Wavenet / Neural2 へ差し替える（例: ja-JP-Wavenet-B）。
-    // 読み方のプロンプト指示は Standard 系に無いため、速さは TTS_SPEED
-    // （speakingRate）、高さは TTS_PITCH で調整する。TTS_SPEED はアプリが速度を
-    // 送ってこなかったときの既定値で、送ってきた場合はそちら（プリセット3値のみ）が優先。
-    "TTS_JA_VOICE_NAME": "ja-JP-Standard-B",
-    "TTS_EN_VOICE_NAME": "en-US-Standard-G",
-    // アプリのアナウンス速度設定（既定「普通」）と同じ等速。速度を送ってこない
-    // 旧バージョンのアプリも、設定の既定値と同じ速さで聞こえるようにしている
+    // ElevenLabs voices for Japanese and English announcements.
+    "TTS_JA_VOICE_ID": "OZ0L6eISlOejga3XjDFt",
+    "TTS_EN_VOICE_ID": "OZ0L6eISlOejga3XjDFt",
     "TTS_SPEED": "1.0",
     "SESSION_TOKEN_TTL_SECONDS": "3600",
     "UPLOAD_PUBLIC_BASE_URL": "https://uploads-dev.trainlcd.app",
@@ -103,7 +94,7 @@
   //   SESSION_JWT_SECRET / GOOGLE_PLAY_SA_KEY / APPSTORE_CONNECT_KEY /
   //   OCTOKIT_PAT / DISCORD_CS_WEBHOOK_URL / DISCORD_CRASH_WEBHOOK_URL / DISCORD_REVIEW_WEBHOOK_URL /
   //   ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_VERTEX_SA_KEY / LANGSMITH_API_KEY /
-  //   GOOGLE_TTS_SA_KEY
+  //   ELEVENLABS_API_KEY
 
   "env": {
     "production": {
@@ -140,11 +131,9 @@
         "AI_TRIAGE_MODEL": "@cf/google/gemma-4-26b-a4b-it",
         // dev と同じ。閾値を調整したらバージョンを固定する
         "TYPESAFE_MODEL": "jev-latest",
-        // --- TTS（/tts）---
-        // Google Cloud TTS。速度はアプリのアナウンス速度設定（既定「普通」）に
-        // 合わせた等速。dev と本番で差を付けると開発時の体感が本番と食い違う
-        "TTS_JA_VOICE_NAME": "ja-JP-Standard-B",
-        "TTS_EN_VOICE_NAME": "en-US-Standard-G",
+        // ElevenLabs voices for Japanese and English announcements.
+        "TTS_JA_VOICE_ID": "OZ0L6eISlOejga3XjDFt",
+        "TTS_EN_VOICE_ID": "OZ0L6eISlOejga3XjDFt",
         "TTS_SPEED": "1.0",
         "SESSION_TOKEN_TTL_SECONDS": "3600",
         "UPLOAD_PUBLIC_BASE_URL": "https://uploads.trainlcd.app",
