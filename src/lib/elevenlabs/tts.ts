@@ -40,7 +40,8 @@ export const synthesizeSpeech = async (params: {
     }),
     signal: AbortSignal.timeout(30_000),
   });
-  if (!response.ok) throw new Error(`ElevenLabs TTS returned ${response.status}`);
+  if (!response.ok)
+    throw new Error(`ElevenLabs TTS returned ${response.status}`);
   const audio = await response.arrayBuffer();
   if (!audio.byteLength) throw new Error('ElevenLabs TTS returned empty audio');
   return { audioContent: bytesToBase64(audio), mimeType };

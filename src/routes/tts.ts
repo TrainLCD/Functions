@@ -6,12 +6,17 @@ import {
   parseCallableData,
 } from '../lib/callable';
 import { bytesToBase64, sha256Hex } from '../lib/crypto';
-import { MODEL, normalizeResponseFormat, synthesizeSpeech } from '../lib/elevenlabs/tts';
+import {
+  MODEL,
+  normalizeResponseFormat,
+  synthesizeSpeech,
+} from '../lib/elevenlabs/tts';
 import { parseClientSpeed, parseSpeed } from '../lib/google/tts';
 import { writeTtsCache } from '../lib/ttsCache';
 import type { Env } from '../types';
 import { normalizeRomanText } from '../utils/normalize';
 import { stripSsml, utf8ByteLength } from '../utils/ssml';
+
 interface TtsRequest {
   textJa?: unknown;
   textEn?: unknown;
@@ -143,7 +148,9 @@ export const handleTts = async (
   // 速度はアプリの設定を優先し、未指定・プリセット外なら環境変数の既定値を使う。
   // 速度は computeId に含まれるため、選択が変わればキャッシュも自動的に分かれる。
   const configuredSpeed = parseSpeed(env.TTS_SPEED) ?? 1;
-  const speed = parseClientSpeed(data.speed) ?? (configuredSpeed >= 0.7 && configuredSpeed <= 1.2 ? configuredSpeed : 1);
+  const speed =
+    parseClientSpeed(data.speed) ??
+    (configuredSpeed >= 0.7 && configuredSpeed <= 1.2 ? configuredSpeed : 1);
   const ttsOptions = { responseFormat, speed };
 
   const id = await computeId({
