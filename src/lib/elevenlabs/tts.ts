@@ -8,7 +8,9 @@ const formats = {
   opus: ['opus_48000_64', 'audio/ogg'],
 } as const;
 
-export const normalizeResponseFormat = (value?: string) => {
+export const normalizeResponseFormat = (
+  value?: string
+): keyof typeof formats => {
   const format = value?.trim().toLowerCase();
   return format === 'opus' || format === 'wav' ? format : 'mp3';
 };
