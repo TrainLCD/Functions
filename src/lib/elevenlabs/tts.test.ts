@@ -9,7 +9,7 @@ it.each([
   [
     'en',
     'The next station is Shinjuku.',
-    '[voice of a female commuter train conductor] The next station is Shinjuku.',
+    '[voice of a female commuter train conductor] The next station is [Japanese railway station name] Shinjuku.',
   ],
 ] as const)(
   'prefixes the %s announcement sent to ElevenLabs',

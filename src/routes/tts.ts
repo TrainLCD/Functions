@@ -36,8 +36,8 @@ interface VoiceCacheMeta {
 }
 
 const TEXT_BYTE_LIMIT = 4000;
-// Google TTS 向けの発音用置換を使った旧音声と区別する。
-const HASH_VERSION = 20;
+// 英語の駅名直前タグがない旧音声と区別する。
+const HASH_VERSION = 21;
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;

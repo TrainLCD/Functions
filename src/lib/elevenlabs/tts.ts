@@ -1,4 +1,5 @@
 import { bytesToBase64 } from '../crypto';
+import { addStationNameTags } from './stationTags';
 
 export const MODEL = 'eleven_v4';
 // 英語アナウンスは Imogen（女性）に固定する。
@@ -32,6 +33,7 @@ export const synthesizeSpeech = async (params: {
   };
 }) => {
   const { apiKey, voiceName, languageCode, text, opts } = params;
+  const speechText = languageCode === 'en' ? addStationNameTags(text) : text;
   const [format, mimeType] = formats[opts.responseFormat];
   // SDK の初期化を Worker 起動時ではなく、キャッシュ未命中の合成時に行う。
   const { ElevenLabsClient, ElevenLabsError } = await import(
@@ -44,7 +46,7 @@ export const synthesizeSpeech = async (params: {
     const stream = await client.textToSpeech.convert(
       voiceName,
       {
-        text: `${conductorVoiceTag[languageCode]} ${text}`,
+        text: `${conductorVoiceTag[languageCode]} ${speechText}`,
         modelId: MODEL,
         languageCode,
         outputFormat: format,
@@ -63,7 +65,7 @@ export const synthesizeSpeech = async (params: {
     const sanitize = (value: unknown): string | undefined => {
       if (typeof value !== 'string') return undefined;
       let safe = value;
-      for (const secret of [apiKey, text]) {
+      for (const secret of [apiKey, speechText, text]) {
         if (secret) safe = safe.split(secret).join('[REDACTED]');
       }
       return safe.slice(0, 1000);
