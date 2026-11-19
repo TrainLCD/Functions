@@ -37,8 +37,8 @@ interface VoiceCacheMeta {
 }
 
 const TEXT_BYTE_LIMIT = 4000;
-// 年齢・性別を指定していた旧車掌タグの合成結果と区別する。
-const HASH_VERSION = 17;
+// 通勤電車を指定していない旧車掌タグの合成結果と区別する。
+const HASH_VERSION = 18;
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;

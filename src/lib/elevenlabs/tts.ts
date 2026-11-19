@@ -3,8 +3,8 @@ import { bytesToBase64 } from '../crypto';
 export const MODEL = 'eleven_v4';
 
 const conductorVoiceTag = {
-  ja: '[車掌の声]',
-  en: '[voice of a train conductor]',
+  ja: '[通勤電車の車掌の声]',
+  en: '[voice of a commuter train conductor]',
 } as const;
 
 const formats = {
