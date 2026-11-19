@@ -22,10 +22,10 @@ beforeEach(() => {
 });
 
 it.each(['miss', 'hit', 'r2-failure'])(
-  'uses Marie despite old overrides on a cache %s',
+  'uses Imogen despite old overrides on a cache %s',
   async (cacheState) => {
     const expectedId = await computeId({
-      enVoiceName: 'ijbjxuucMt4vnA0kA9IO',
+      enVoiceName: 'jv41DhCf464zw0TI7I1w',
       jaVoiceName: 'japanese-voice',
       pitch: null,
       speed: null,
@@ -85,14 +85,14 @@ it.each(['miss', 'hit', 'r2-failure'])(
       expect(synthesizeSpeech).toHaveBeenCalledWith({
         apiKey: 'test',
         languageCode: 'en',
-        voiceName: 'ijbjxuucMt4vnA0kA9IO',
+        voiceName: 'jv41DhCf464zw0TI7I1w',
         text: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
         opts: { responseFormat: 'mp3' },
       });
       expect(writeTtsCache).toHaveBeenCalledWith(
         expect.objectContaining({
           id: expectedId,
-          voiceEn: 'ijbjxuucMt4vnA0kA9IO',
+          voiceEn: 'jv41DhCf464zw0TI7I1w',
           jaAudioContent: undefined,
           textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
         }),

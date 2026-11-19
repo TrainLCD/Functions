@@ -89,7 +89,7 @@ You can also bulk-load secrets with the helper scripts: copy
 
 See `vars` in `wrangler.jsonc`. Configure the Japanese TTS voice ID,
 AI model name, package name, and public upload URL per environment.
-English uses Marie in every environment. TTS authenticates directly with
+English uses Imogen in every environment. TTS authenticates directly with
 ElevenLabs using `ELEVENLABS_API_KEY` and does not use Cloudflare AI Gateway.
 
 ### CI / CD (GitHub Actions)
@@ -145,7 +145,7 @@ A session JWT is obtained from `POST /auth/token` (body `{ "installId": "<uuid>"
 ### `POST /tts`
 
 Synthesis uses Eleven v4. The client sends plain text; stray SSML tags are
-stripped. English is fixed to Marie (female); Japanese uses KV `jaVoiceId`
+stripped. English is fixed to Imogen (female); Japanese uses KV `jaVoiceId`
 then `TTS_JA_VOICE_ID`. Client voice overrides are ignored.
 
 ```json
@@ -529,7 +529,7 @@ npm run find-orphaned-tts -- --env production --delete
 
 ### Eleven v4 の車内放送
 
-英語音声は [Marie](https://elevenlabs.io/voices/ijbjxuucMt4vnA0kA9IO)
+英語音声は [Imogen](https://elevenlabs.io/voices/jv41DhCf464zw0TI7I1w)
 （女性）に固定し、女性の通勤電車の車掌を指定するタグを付けます。
 英語の旧 KV `enVoiceId`・環境変数 `TTS_EN_VOICE_ID`・リクエストの音声指定は使用しません。
 日本語は KV `jaVoiceId`、環境変数 `TTS_JA_VOICE_ID` の順で選択します。

@@ -1,8 +1,8 @@
 import { bytesToBase64 } from '../crypto';
 
 export const MODEL = 'eleven_v4';
-// 英語アナウンスは Marie（女性）に固定する。
-export const ENGLISH_VOICE_ID = 'ijbjxuucMt4vnA0kA9IO';
+// 英語アナウンスは Imogen（女性）に固定する。
+export const ENGLISH_VOICE_ID = 'jv41DhCf464zw0TI7I1w';
 
 const conductorVoiceTag = {
   ja: '[通勤電車の車掌の声]',
