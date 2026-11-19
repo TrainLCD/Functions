@@ -30,7 +30,7 @@ it.each(['miss', 'hit', 'r2-failure'])(
       pitch: null,
       speed: null,
       responseFormat: 'mp3',
-      textEn: 'Hello.',
+      textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
       textJa: '',
     });
     const get = jest.fn(async (key: string) =>
@@ -58,7 +58,11 @@ it.each(['miss', 'hit', 'r2-failure'])(
         new Request('https://example.com/tts', {
           method: 'POST',
           body: JSON.stringify({
-            data: { textEn: 'Hello.', enVoiceName: 'male', speed },
+            data: {
+              textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
+              enVoiceName: 'male',
+              speed,
+            },
           }),
         }),
         env,
@@ -82,7 +86,7 @@ it.each(['miss', 'hit', 'r2-failure'])(
         apiKey: 'test',
         languageCode: 'en',
         voiceName: 'ijbjxuucMt4vnA0kA9IO',
-        text: 'Hello.',
+        text: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
         opts: { responseFormat: 'mp3' },
       });
       expect(writeTtsCache).toHaveBeenCalledWith(
@@ -90,6 +94,7 @@ it.each(['miss', 'hit', 'r2-failure'])(
           id: expectedId,
           voiceEn: 'ijbjxuucMt4vnA0kA9IO',
           jaAudioContent: undefined,
+          textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
         }),
         env
       );

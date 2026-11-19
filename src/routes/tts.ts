@@ -36,8 +36,8 @@ interface VoiceCacheMeta {
 }
 
 const TEXT_BYTE_LIMIT = 4000;
-// 女性を明示していない旧英語タグの合成結果と区別する。
-const HASH_VERSION = 19;
+// Google TTS 向けの発音用置換を使った旧音声と区別する。
+const HASH_VERSION = 20;
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;
