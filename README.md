@@ -538,16 +538,3 @@ Eleven v4 は[速度設定に対応していません](https://elevenlabs.io/doc
 アプリで読み上げ速度を変更しても、サーバーで生成する音声には反映されません。
 互換性のためリクエストの `speed` は受け取りますが、`TTS_SPEED` とともに合成には使用せず、
 速度だけが異なる要求は同じキャッシュを使用します。
-
-英語の定型放送では、駅名の直前に `[Japanese railway station name]` を付けて
-ElevenLabsへ送信します（例: `The next station is [Japanese railway station name] Shinjuku.`）。
-次駅・到着駅・行先・経由駅・停車駅一覧・定型の駅名反復を対象にします。
-サーバーには駅名の位置情報が届かないため、定型句から挿入位置を判断します。
-自由文や、鉄道／バスの区別が英文中にない場合を意味解析する機能ではありません。
-日本語本文には挿入しません。キャッシュ版を21に更新し、タグなしの旧音声と区別します。
-
-路線名にも `[Japanese railway line name]` を直前に付けます。
-乗換案内・直通先の路線・`This is the … Line` などの定型句を対象にします。
-例: `Please change here for the [Japanese railway line name] Yamanote Line.`
-駅名には駅名タグを使用し、会社名への謝辞には路線名タグを付けません。
-路線名タグ追加に伴いキャッシュ版を22へ更新しています。
