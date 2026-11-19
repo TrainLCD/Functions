@@ -5,11 +5,11 @@ afterEach(() => {
 });
 
 it.each([
-  ['ja', '次は、新宿です。', '[若い女性車掌の声] 次は、新宿です。'],
+  ['ja', '次は、新宿です。', '[車掌の声] 次は、新宿です。'],
   [
     'en',
     'The next station is Shinjuku.',
-    '[voice of a young female train conductor] The next station is Shinjuku.',
+    '[voice of a train conductor] The next station is Shinjuku.',
   ],
 ] as const)(
   'prefixes the %s announcement sent to ElevenLabs',
