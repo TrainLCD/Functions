@@ -21,12 +21,7 @@ export interface Env {
   TYPESAFE_API_KEY: string;
   /** TypeSafe の System One モデル名。wrangler.jsonc の vars で指定する */
   TYPESAFE_MODEL: string;
-  /**
-   * Google Cloud TTS のボイス名（例: ja-JP-Standard-B）。ロケールを含むため
-   * 日英で別々に指定する。Standard / Wavenet / Neural2 のみ受け付ける
-   */
-  TTS_JA_VOICE_NAME: string;
-  TTS_EN_VOICE_NAME: string;
+  TTS_JA_VOICE_ID: string;
   SESSION_TOKEN_TTL_SECONDS: string;
   UPLOAD_PUBLIC_BASE_URL: string;
   FEW_SHOT_KV_KEY: string;
@@ -73,8 +68,7 @@ export interface Env {
    * アカウント認証のため。ロールは Vertex AI User 相当）
    */
   GOOGLE_VERTEX_SA_KEY?: string;
-  /** Cloud TTS（/tts）用の Google サービスアカウント鍵 JSON 文字列 */
-  GOOGLE_TTS_SA_KEY?: string;
+  ELEVENLABS_API_KEY?: string;
   /** LangSmith の API キー（dev 環境のトレーシング用・任意） */
   LANGSMITH_API_KEY?: string;
 

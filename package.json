@@ -23,6 +23,7 @@
     "@ai-sdk/anthropic": "^4.0.23",
     "@ai-sdk/google-vertex": "^5.0.54",
     "@ai-sdk/openai": "^4.0.23",
+    "@elevenlabs/elevenlabs-js": "^2.79.0",
     "ai": "^7.0.41",
     "dayjs": "^1.11.9",
     "jsonc-parser": "^3.3.1",
