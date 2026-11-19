@@ -9,7 +9,7 @@ it.each([
   [
     'en',
     'The next station is Shinjuku.',
-    '[voice of a commuter train conductor] The next station is Shinjuku.',
+    '[voice of a female commuter train conductor] The next station is Shinjuku.',
   ],
 ] as const)(
   'prefixes the %s announcement sent to ElevenLabs',
@@ -22,14 +22,13 @@ it.each([
       voiceName: 'test-voice',
       languageCode,
       text,
-      opts: { responseFormat: 'mp3', speed: 1.15 },
+      opts: { responseFormat: 'mp3' },
     });
     const init = fetchMock.mock.calls[0][1];
     expect(JSON.parse(String(init?.body))).toEqual({
       text: expected,
       model_id: 'eleven_v4',
       language_code: languageCode,
-      voice_settings: { speed: 1.15 },
     });
   }
 );
@@ -72,7 +71,7 @@ it.each([
     );
     expect(init?.method).toBe('POST');
     expect(new Headers(init?.headers).get('xi-api-key')).toBe('test');
-    expect(JSON.parse(String(init?.body)).voice_settings).toEqual({ speed: 1 });
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty('voice_settings');
   }
 );
 

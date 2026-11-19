@@ -7,11 +7,11 @@ import {
 } from '../lib/callable';
 import { bytesToBase64, sha256Hex } from '../lib/crypto';
 import {
+  ENGLISH_VOICE_ID,
   MODEL,
   normalizeResponseFormat,
   synthesizeSpeech,
 } from '../lib/elevenlabs/tts';
-import { parseClientSpeed, parseSpeed } from '../lib/google/tts';
 import { writeTtsCache } from '../lib/ttsCache';
 import type { Env } from '../types';
 import { normalizeRomanText } from '../utils/normalize';
@@ -20,13 +20,12 @@ import { stripSsml, utf8ByteLength } from '../utils/ssml';
 interface TtsRequest {
   textJa?: unknown;
   textEn?: unknown;
-  // アナウンス設定で選んだ読み上げ速度。プリセット外の値は無視される
+  // 旧クライアントとの互換用。Eleven v4 は速度設定に対応しない。
   speed?: unknown;
 }
 
 interface TtsConfig {
   jaVoiceId?: string;
-  enVoiceId?: string;
 }
 
 interface VoiceCacheMeta {
@@ -37,8 +36,8 @@ interface VoiceCacheMeta {
 }
 
 const TEXT_BYTE_LIMIT = 4000;
-// 通勤電車を指定していない旧車掌タグの合成結果と区別する。
-const HASH_VERSION = 18;
+// 女性を明示していない旧英語タグの合成結果と区別する。
+const HASH_VERSION = 19;
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;
@@ -141,25 +140,20 @@ export const handleTts = async (
 
   const ttsConfig = await getTtsConfig(env);
   const jaVoiceName = ttsConfig.jaVoiceId || env.TTS_JA_VOICE_ID;
-  const enVoiceName = ttsConfig.enVoiceId || env.TTS_EN_VOICE_ID;
+  const enVoiceName = ENGLISH_VOICE_ID;
 
   // 環境変数は文字列なので、送信前に正規化した値を作る。この正規化後の値を
   // そのままキャッシュキーにも使い、設定変更が確実に別 ID になるようにする。
   const responseFormat = normalizeResponseFormat(env.TTS_RESPONSE_FORMAT);
-  // 速度はアプリの設定を優先し、未指定・プリセット外なら環境変数の既定値を使う。
-  // 速度は computeId に含まれるため、選択が変わればキャッシュも自動的に分かれる。
-  const configuredSpeed = parseSpeed(env.TTS_SPEED) ?? 1;
-  const speed =
-    parseClientSpeed(data.speed) ??
-    (configuredSpeed >= 0.7 && configuredSpeed <= 1.2 ? configuredSpeed : 1);
-  const ttsOptions = { responseFormat, speed };
+  // Eleven v4 は速度設定非対応。要求速度で同じ音声のキャッシュを分割しない。
+  const ttsOptions = { responseFormat };
 
   const id = await computeId({
     enVoiceName,
     jaVoiceName,
     pitch: null,
     responseFormat,
-    speed: speed ?? null,
+    speed: null,
     textEn,
     textJa,
   });

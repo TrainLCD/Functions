@@ -1,10 +1,12 @@
 import { bytesToBase64 } from '../crypto';
 
 export const MODEL = 'eleven_v4';
+// 英語アナウンスは Marie（女性）に固定する。
+export const ENGLISH_VOICE_ID = 'ijbjxuucMt4vnA0kA9IO';
 
 const conductorVoiceTag = {
   ja: '[通勤電車の車掌の声]',
-  en: '[voice of a commuter train conductor]',
+  en: '[voice of a female commuter train conductor]',
 } as const;
 
 const formats = {
@@ -27,7 +29,6 @@ export const synthesizeSpeech = async (params: {
   text: string;
   opts: {
     responseFormat: keyof typeof formats;
-    speed?: number;
   };
 }) => {
   const { apiKey, voiceName, languageCode, text, opts } = params;
@@ -47,7 +48,7 @@ export const synthesizeSpeech = async (params: {
         modelId: MODEL,
         languageCode,
         outputFormat: format,
-        voiceSettings: { speed: opts.speed ?? 1 },
+        // Eleven v4 は speed 非対応のため送信しない。
       },
       {
         // 既存の単発リクエストと、本文受信を含む30秒の期限を維持する。

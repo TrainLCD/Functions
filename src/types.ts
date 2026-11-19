@@ -22,7 +22,6 @@ export interface Env {
   /** TypeSafe の System One モデル名。wrangler.jsonc の vars で指定する */
   TYPESAFE_MODEL: string;
   TTS_JA_VOICE_ID: string;
-  TTS_EN_VOICE_ID: string;
   SESSION_TOKEN_TTL_SECONDS: string;
   UPLOAD_PUBLIC_BASE_URL: string;
   FEW_SHOT_KV_KEY: string;

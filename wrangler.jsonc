@@ -61,9 +61,8 @@
     // 調整したら、エイリアスではなく "jev-1.13.0" のようにバージョンを固定する
     // （エイリアスは新リリースで指す先が動くため）。
     "TYPESAFE_MODEL": "jev-latest",
-    // ElevenLabs voices for Japanese and English announcements.
+    // Japanese ElevenLabs voice; English is fixed to Marie in code.
     "TTS_JA_VOICE_ID": "t3iNwCjYhE9IEQPVBlys",
-    "TTS_EN_VOICE_ID": "ijbjxuucMt4vnA0kA9IO",
     "TTS_SPEED": "1.0",
     "SESSION_TOKEN_TTL_SECONDS": "3600",
     "UPLOAD_PUBLIC_BASE_URL": "https://uploads-dev.trainlcd.app",
@@ -131,9 +130,8 @@
         "AI_TRIAGE_MODEL": "@cf/google/gemma-4-26b-a4b-it",
         // dev と同じ。閾値を調整したらバージョンを固定する
         "TYPESAFE_MODEL": "jev-latest",
-        // ElevenLabs voices for Japanese and English announcements.
+        // Japanese ElevenLabs voice; English is fixed to Marie in code.
         "TTS_JA_VOICE_ID": "OZ0L6eISlOejga3XjDFt",
-        "TTS_EN_VOICE_ID": "OZ0L6eISlOejga3XjDFt",
         "TTS_SPEED": "1.0",
         "SESSION_TOKEN_TTL_SECONDS": "3600",
         "UPLOAD_PUBLIC_BASE_URL": "https://uploads.trainlcd.app",
