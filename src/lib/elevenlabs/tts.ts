@@ -1,4 +1,5 @@
 import { bytesToBase64 } from '../crypto';
+import { addLineNameTags } from './lineTags';
 import { addStationNameTags } from './stationTags';
 
 export const MODEL = 'eleven_v4';
@@ -33,7 +34,8 @@ export const synthesizeSpeech = async (params: {
   };
 }) => {
   const { apiKey, voiceName, languageCode, text, opts } = params;
-  const speechText = languageCode === 'en' ? addStationNameTags(text) : text;
+  const speechText =
+    languageCode === 'en' ? addLineNameTags(addStationNameTags(text)) : text;
   const [format, mimeType] = formats[opts.responseFormat];
   // SDK の初期化を Worker 起動時ではなく、キャッシュ未命中の合成時に行う。
   const { ElevenLabsClient, ElevenLabsError } = await import(

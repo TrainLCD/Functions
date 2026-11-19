@@ -8,8 +8,8 @@ it.each([
   ['ja', '次は、新宿です。', '[通勤電車の車掌の声] 次は、新宿です。'],
   [
     'en',
-    'The next station is Shinjuku.',
-    '[voice of a female commuter train conductor] The next station is [Japanese railway station name] Shinjuku.',
+    'The next station is Shinjuku. Please change here for the Yamanote Line.',
+    '[voice of a female commuter train conductor] The next station is [Japanese railway station name] Shinjuku. Please change here for the [Japanese railway line name] Yamanote Line.',
   ],
 ] as const)(
   'prefixes the %s announcement sent to ElevenLabs',

@@ -545,3 +545,9 @@ ElevenLabsへ送信します（例: `The next station is [Japanese railway stati
 サーバーには駅名の位置情報が届かないため、定型句から挿入位置を判断します。
 自由文や、鉄道／バスの区別が英文中にない場合を意味解析する機能ではありません。
 日本語本文には挿入しません。キャッシュ版を21に更新し、タグなしの旧音声と区別します。
+
+路線名にも `[Japanese railway line name]` を直前に付けます。
+乗換案内・直通先の路線・`This is the … Line` などの定型句を対象にします。
+例: `Please change here for the [Japanese railway line name] Yamanote Line.`
+駅名には駅名タグを使用し、会社名への謝辞には路線名タグを付けません。
+路線名タグ追加に伴いキャッシュ版を22へ更新しています。
