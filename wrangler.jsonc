@@ -62,7 +62,7 @@
     // （エイリアスは新リリースで指す先が動くため）。
     "TYPESAFE_MODEL": "jev-latest",
     // ElevenLabs voices for Japanese and English announcements.
-    "TTS_JA_VOICE_ID": "t3iNwCjYhE9IEQPVBlys",
+    "TTS_JA_VOICE_ID": "FR3CDlHqTZMEy4EDkq47",
     "TTS_EN_VOICE_ID": "ijbjxuucMt4vnA0kA9IO",
     "TTS_SPEED": "1.0",
     "SESSION_TOKEN_TTL_SECONDS": "3600",
