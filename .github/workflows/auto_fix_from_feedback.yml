@@ -94,8 +94,8 @@ jobs:
           triage_labels: "🟠 P1 / High,🟡 P2 / Medium,🟢 P3 / Low"
           handoffs: MobileApp,StationAPI
           guidelines_file: AGENTS.md
-          # このリポジトリに PR テンプレートは無い。
-          pr_template: ""
+          # 手動作成と同じ影響調査・検証・Issue紐づけの様式を使う。
+          pr_template: ".github/pull_request_template.md"
           # .github/actions/verify/action.yml が回すものと同じ。バンドルまで
           # 入れてあるのは、tsc が型しか見ないため、import の解決ミスや
           # nodejs_compat で賄えない Node API はバンドルして初めて落ちるから。
