@@ -2,7 +2,7 @@
 <lexicon version="1.0" xmlns="http://www.w3.org/2005/01/pronunciation-lexicon" alphabet="ipa" xml:lang="en-US">
   <lexeme>
     <grapheme>Hosokura Mine Park Mae</grapheme>
-    <alias>Hosokura Me-nay Park Mae</alias>
+    <alias>Hosokura Mine Park Mae</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-makuharihongo</grapheme>
