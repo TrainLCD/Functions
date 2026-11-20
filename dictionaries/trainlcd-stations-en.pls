@@ -1,6 +1,138 @@
 <?xml version='1.0' encoding='utf-8'?>
 <lexicon version="1.0" xmlns="http://www.w3.org/2005/01/pronunciation-lexicon" alphabet="ipa" xml:lang="en-US">
   <lexeme>
+    <grapheme>Kaysei Narita Airport Line</grapheme>
+    <alias>Kay Say Narita Airport Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei Kanamachi Line</grapheme>
+    <alias>Kay Say Kanamachi Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei Oshia-gay Line</grapheme>
+    <alias>Kay Say Oshiage Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-makuharihongo</grapheme>
+    <alias>Kay Say makuharihongo</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei Chihara Line</grapheme>
+    <alias>Kay Say Chihara Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei Matsudo Line</grapheme>
+    <alias>Kay Say Matsudo Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei Oshiage Line</grapheme>
+    <alias>Kay Say Oshiage Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kayhin-tohoku Line</grapheme>
+    <alias>Kay Heen Toh Hoh Koo Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei Chiba Line</grapheme>
+    <alias>Kay Say Chiba Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei Main Line</grapheme>
+    <alias>Kay Say Main Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-funabashi</grapheme>
+    <alias>Kay Say funabashi</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-kanamachi</grapheme>
+    <alias>Kay Say kanamachi</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-nishifuna</grapheme>
+    <alias>Kay Say nishifuna</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-tsudanuma</grapheme>
+    <alias>Kay Say tsudanuma</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-hikifune</grapheme>
+    <alias>Kay Say hikifune</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-makuhari</grapheme>
+    <alias>Kay Say makuhari</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-nakayama</grapheme>
+    <alias>Kay Say nakayama</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-takasago</grapheme>
+    <alias>Kay Say takasago</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-tateishi</grapheme>
+    <alias>Kay Say tateishi</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-ina-gay</grapheme>
+    <alias>Kay Say inage</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-narita</grapheme>
+    <alias>Kay Say narita</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-sakura</grapheme>
+    <alias>Kay Say sakura</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-sekiya</grapheme>
+    <alias>Kay Say sekiya</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-shisui</grapheme>
+    <alias>Kay Say shisui</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-yawata</grapheme>
+    <alias>Kay Say yawata</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-chiba</grapheme>
+    <alias>Kay Say chiba</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-inage</grapheme>
+    <alias>Kay Say inage</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-koiwa</grapheme>
+    <alias>Kay Say koiwa</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-okubo</grapheme>
+    <alias>Kay Say okubo</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-owada</grapheme>
+    <alias>Kay Say owada</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-ueno</grapheme>
+    <alias>Kay Say ueno</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei-usui</grapheme>
+    <alias>Kay Say usui</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Kaysei</grapheme>
+    <alias>Kay Say</alias>
+  </lexeme>
+  <lexeme>
     <grapheme>Keisei Chiba Line</grapheme>
     <alias>Kay Say Chiba Line</alias>
   </lexeme>
