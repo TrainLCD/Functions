@@ -1,6 +1,30 @@
 <?xml version='1.0' encoding='utf-8'?>
 <lexicon version="1.0" xmlns="http://www.w3.org/2005/01/pronunciation-lexicon" alphabet="ipa" xml:lang="en-US">
   <lexeme>
+    <grapheme>Keisei Chiba Line</grapheme>
+    <alias>Kay Say Chiba Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Keisei Chihara Line</grapheme>
+    <alias>Kay Say Chihara Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Keisei Kanamachi Line</grapheme>
+    <alias>Kay Say Kanamachi Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Keisei Matsudo Line</grapheme>
+    <alias>Kay Say Matsudo Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Keisei Narita Airport Line</grapheme>
+    <alias>Kay Say Narita Airport Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Keisei Oshiage Line</grapheme>
+    <alias>Kay Say Oshiage Line</alias>
+  </lexeme>
+  <lexeme>
     <grapheme>Keisei Main Line</grapheme>
     <alias>Kay Say Main Line</alias>
   </lexeme>
@@ -14,43 +38,43 @@
   </lexeme>
   <lexeme>
     <grapheme>Keisei-makuharihongo</grapheme>
-    <alias>Kay-say-makuharihongo</alias>
+    <alias>Kay Say makuharihongo</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-funabashi</grapheme>
-    <alias>Kay-say-funabashi</alias>
+    <alias>Kay Say funabashi</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-kanamachi</grapheme>
-    <alias>Kay-say-kanamachi</alias>
+    <alias>Kay Say kanamachi</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-nishifuna</grapheme>
-    <alias>Kay-say-nishifuna</alias>
+    <alias>Kay Say nishifuna</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-tsudanuma</grapheme>
-    <alias>Kay-say-tsudanuma</alias>
+    <alias>Kay Say tsudanuma</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-hikifune</grapheme>
-    <alias>Kay-say-hikifune</alias>
+    <alias>Kay Say hikifune</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-makuhari</grapheme>
-    <alias>Kay-say-makuhari</alias>
+    <alias>Kay Say makuhari</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-nakayama</grapheme>
-    <alias>Kay-say-nakayama</alias>
+    <alias>Kay Say nakayama</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-takasago</grapheme>
-    <alias>Kay-say-takasago</alias>
+    <alias>Kay Say takasago</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-tateishi</grapheme>
-    <alias>Kay-say-tateishi</alias>
+    <alias>Kay Say tateishi</alias>
   </lexeme>
   <lexeme>
     <grapheme>Seibu-tachikawa</grapheme>
@@ -74,23 +98,23 @@
   </lexeme>
   <lexeme>
     <grapheme>Keisei-narita</grapheme>
-    <alias>Kay-say-narita</alias>
+    <alias>Kay Say narita</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-sakura</grapheme>
-    <alias>Kay-say-sakura</alias>
+    <alias>Kay Say sakura</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-sekiya</grapheme>
-    <alias>Kay-say-sekiya</alias>
+    <alias>Kay Say sekiya</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-shisui</grapheme>
-    <alias>Kay-say-shisui</alias>
+    <alias>Kay Say shisui</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-yawata</grapheme>
-    <alias>Kay-say-yawata</alias>
+    <alias>Kay Say yawata</alias>
   </lexeme>
   <lexeme>
     <grapheme>Mineyoshikawa</grapheme>
@@ -102,23 +126,23 @@
   </lexeme>
   <lexeme>
     <grapheme>Keisei-chiba</grapheme>
-    <alias>Kay-say-chiba</alias>
+    <alias>Kay Say chiba</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-inage</grapheme>
-    <alias>Kay-say-inage</alias>
+    <alias>Kay Say inage</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-koiwa</grapheme>
-    <alias>Kay-say-koiwa</alias>
+    <alias>Kay Say koiwa</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-okubo</grapheme>
-    <alias>Kay-say-okubo</alias>
+    <alias>Kay Say okubo</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-owada</grapheme>
-    <alias>Kay-say-owada</alias>
+    <alias>Kay Say owada</alias>
   </lexeme>
   <lexeme>
     <grapheme>Minami-omine</grapheme>
@@ -126,11 +150,11 @@
   </lexeme>
   <lexeme>
     <grapheme>Keisei-ueno</grapheme>
-    <alias>Kay-say-ueno</alias>
+    <alias>Kay Say ueno</alias>
   </lexeme>
   <lexeme>
     <grapheme>Keisei-usui</grapheme>
-    <alias>Kay-say-usui</alias>
+    <alias>Kay Say usui</alias>
   </lexeme>
   <lexeme>
     <grapheme>Tsurugamine</grapheme>
@@ -170,7 +194,7 @@
   </lexeme>
   <lexeme>
     <grapheme>Keisei</grapheme>
-    <alias>Kay-say</alias>
+    <alias>Kay Say</alias>
   </lexeme>
   <lexeme>
     <grapheme>Seibu</grapheme>
