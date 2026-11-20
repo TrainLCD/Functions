@@ -69,6 +69,8 @@ export interface Env {
    */
   GOOGLE_VERTEX_SA_KEY?: string;
   ELEVENLABS_API_KEY?: string;
+  TTS_EN_DICTIONARY_ID?: string;
+  TTS_EN_DICTIONARY_VERSION_ID?: string;
   /** LangSmith の API キー（dev 環境のトレーシング用・任意） */
   LANGSMITH_API_KEY?: string;
 

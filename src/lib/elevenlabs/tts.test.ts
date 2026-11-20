@@ -162,3 +162,19 @@ it('logs provider diagnostics without the key, input text or other response fiel
   expect(JSON.stringify(log.mock.calls)).not.toContain(apiKey);
   expect(JSON.stringify(log.mock.calls)).not.toContain(params.text);
 });
+
+it('sends the pinned English dictionary to ElevenLabs', async () => {
+  const fetchMock = jest
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValue(new Response(new Uint8Array([1])));
+  await synthesizeSpeech({
+    ...params,
+    languageCode: 'en',
+    text: 'Mine',
+    dictionary: { pronunciationDictionaryId: 'stations', versionId: 'v1' },
+  });
+  expect(
+    JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+      .pronunciation_dictionary_locators
+  ).toEqual([{ pronunciation_dictionary_id: 'stations', version_id: 'v1' }]);
+});

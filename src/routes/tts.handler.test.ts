@@ -101,3 +101,37 @@ it.each(['miss', 'hit', 'r2-failure'])(
     }
   }
 );
+
+it('changes the cache ID by English dictionary version only for requests containing English', async () => {
+  const env = {
+    ELEVENLABS_API_KEY: 'test',
+    TTS_JA_VOICE_ID: 'ja',
+    TTS_EN_DICTIONARY_ID: 'stations',
+    TTS_EN_DICTIONARY_VERSION_ID: 'v1',
+    TTS_KV: { get: jest.fn().mockResolvedValue(null) },
+  };
+  const request = async (textEn: string) => {
+    const response = await handleTts(
+      new Request('https://example.com/tts', {
+        method: 'POST',
+        body: JSON.stringify({ data: { textJa: '次は', textEn } }),
+      }),
+      env as unknown as Env,
+      { waitUntil: jest.fn() } as unknown as ExecutionContext
+    );
+    return ((await response.json()) as { result: { id: string } }).result.id;
+  };
+  const ja = await request('');
+  const both = await request('Mine');
+  expect(synthesizeSpeech).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      languageCode: 'en',
+      dictionary: { pronunciationDictionaryId: 'stations', versionId: 'v1' },
+    })
+  );
+  env.TTS_EN_DICTIONARY_VERSION_ID = 'v2';
+  expect(await request('')).toBe(ja);
+  expect(await request('Mine')).not.toBe(both);
+  env.TTS_EN_DICTIONARY_VERSION_ID = '';
+  await expect(request('Mine')).rejects.toThrow('must be configured together');
+});
