@@ -538,3 +538,19 @@ Eleven v4 は[速度設定に対応していません](https://elevenlabs.io/doc
 アプリで読み上げ速度を変更しても、サーバーで生成する音声には反映されません。
 互換性のためリクエストの `speed` は受け取りますが、`TTS_SPEED` とともに合成には使用せず、
 速度だけが異なる要求は同じキャッシュを使用します。
+
+### 英語駅名の発音辞書
+
+`dictionaries/trainlcd-stations-en.pls` を ElevenLabs に一度登録し、返された
+`id` と `version_id` を Worker の環境変数 `TTS_EN_DICTIONARY_ID` と
+`TTS_EN_DICTIONARY_VERSION_ID` にそれぞれ設定する。開発・本番で個別に設定できる。
+
+```sh
+curl --fail-with-body https://api.elevenlabs.io/v1/pronunciation-dictionaries/add-from-file \
+  -H "xi-api-key: $ELEVENLABS_API_KEY" \
+  -F 'name=TrainLCD English Station Names' \
+  -F 'file=@dictionaries/trainlcd-stations-en.pls'
+```
+
+両方を省略すると従来どおり辞書なしで合成する。辞書を更新したら版IDも更新する。
+英語を含む要求は新しいキャッシュに切り替わる。

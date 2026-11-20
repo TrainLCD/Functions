@@ -64,6 +64,8 @@ const getTtsConfig = async (env: Env): Promise<TtsConfig> => {
 // 直列化する。ネストしたオプションは名前がリストに無いと丸ごと落ちるため、
 // キャッシュキーへ含めたい値はすべてトップレベルへ平坦化して渡すこと。
 export const computeId = async (payload: {
+  enDictionaryId?: string;
+  enDictionaryVersionId?: string;
   enVoiceName: string;
   jaVoiceName: string;
   pitch: number | null;
@@ -148,7 +150,22 @@ export const handleTts = async (
   // Eleven v4 は速度設定非対応。要求速度で同じ音声のキャッシュを分割しない。
   const ttsOptions = { responseFormat };
 
+  const dictionaryId = wantsEn ? env.TTS_EN_DICTIONARY_ID?.trim() : '';
+  const versionId = wantsEn ? env.TTS_EN_DICTIONARY_VERSION_ID?.trim() : '';
+  if (Boolean(dictionaryId) !== Boolean(versionId)) {
+    throw new CallableError(
+      'failed-precondition',
+      'TTS_EN_DICTIONARY_ID and TTS_EN_DICTIONARY_VERSION_ID must be configured together'
+    );
+  }
+  const dictionary =
+    dictionaryId && versionId
+      ? { pronunciationDictionaryId: dictionaryId, versionId }
+      : undefined;
+
   const id = await computeId({
+    enDictionaryId: dictionary?.pronunciationDictionaryId,
+    enDictionaryVersionId: dictionary?.versionId,
     enVoiceName,
     jaVoiceName,
     pitch: null,
@@ -215,6 +232,7 @@ export const handleTts = async (
           languageCode: 'en',
           voiceName: enVoiceName,
           text: textEn,
+          dictionary,
           opts: ttsOptions,
         })
       : null,

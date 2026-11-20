@@ -23,6 +23,7 @@ export const normalizeResponseFormat = (
 };
 
 export const synthesizeSpeech = async (params: {
+  dictionary?: { pronunciationDictionaryId: string; versionId: string };
   apiKey: string;
   voiceName: string;
   languageCode: 'ja' | 'en';
@@ -46,6 +47,9 @@ export const synthesizeSpeech = async (params: {
       {
         text: `${conductorVoiceTag[languageCode]} ${text}`,
         modelId: MODEL,
+        ...(params.dictionary && {
+          pronunciationDictionaryLocators: [params.dictionary],
+        }),
         languageCode,
         outputFormat: format,
         // Eleven v4 は speed 非対応のため送信しない。
