@@ -1,6 +1,14 @@
 <?xml version='1.0' encoding='utf-8'?>
 <lexicon version="1.0" xmlns="http://www.w3.org/2005/01/pronunciation-lexicon" alphabet="ipa" xml:lang="en-US">
   <lexeme>
+    <grapheme>Keisei Main Line</grapheme>
+    <alias>Kay Say Main Line</alias>
+  </lexeme>
+  <lexeme>
+    <grapheme>Keihin-tohoku Line</grapheme>
+    <alias>Kay Heen Toh Hoh Koo Line</alias>
+  </lexeme>
+  <lexeme>
     <grapheme>Hosokura Mine Park Mae</grapheme>
     <alias>Hosokura Mine Park Mae</alias>
   </lexeme>
