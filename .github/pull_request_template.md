@@ -22,10 +22,20 @@
 - [ ] `npm run typecheck`
 - [ ] `npm run lint`
 - [ ] `npm test`
+- [ ] `npx wrangler deploy --env="" --dry-run`（dev）
+- [ ] `npx wrangler deploy --env=production --dry-run`
 
-## 関連Issue
+<!-- 影響する経路のみ結果を記載し、対象外・未実施は理由を添えてください。検証目的だけで有料AIや実通知を呼び出さないでください。 -->
+- HTTPの認証・入力検証・callable形式とクライアント互換性:
+- TTSの言語・音声設定・キャッシュキー・KV／R2のヒット／ミス／失敗時:
+- Queueの再試行・冪等性・DLQ、GitHub起票・Discord通知への影響:
+- Cron・外部レビュー取得・既読状態への影響:
 
-<!-- 同じ作業のIssueを紐づけてください。完了する場合は Closes #番号、部分対応は Refs #番号です。 -->
+## 関連Issue（必須）
+
+<!-- ブランチ・PR公開前にopen／closedの既存Issueを検索し、本文と対象を確認して同じ件なら再利用。なければ目的・対応範囲・完了条件を記載して起票してください。検索・取得・起票に失敗したら公開を止めてください。 -->
+<!-- 完了するIssueは Closes #123、部分対応や閉じない参照は Refs #123。他リポジトリは Closes TrainLCD/Repository#123 または Refs TrainLCD/Repository#123。空欄・「なし」・コメント内のみは不可です。 -->
+<!-- デフォルト以外へのマージでは自動クローズされません。マージ後にCloses指定のIssueだけ完了条件を確認し、完了したものを手動で閉じてください。Refs・部分対応・未完了のIssueはこの手順では閉じません。 -->
 
 ## デプロイ・運用への影響
 
