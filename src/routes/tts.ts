@@ -6,6 +6,7 @@ import {
   parseCallableData,
 } from '../lib/callable';
 import { bytesToBase64, sha256Hex } from '../lib/crypto';
+import { synthesizeCheckedAnnouncement } from '../lib/elevenlabs/checkedAnnouncement';
 import {
   ENGLISH_VOICE_ID,
   MODEL,
@@ -74,8 +75,8 @@ export const computeId = async (payload: {
   textEn: string;
   textJa: string;
 }): Promise<string> => {
-  // 日本語の旧車掌タグで生成した音声は再利用しない。
-  const version = payload.textJa ? HASH_VERSION + 1 : HASH_VERSION;
+  // 冒頭の車掌タグ混入を検査していない旧音声を再利用しない。
+  const version = payload.textJa ? HASH_VERSION + 2 : HASH_VERSION;
   const obj = { ...payload, version } as const;
   const hashPayload = JSON.stringify(obj, Object.keys(obj).sort());
   return sha256Hex(hashPayload);
@@ -220,13 +221,16 @@ export const handleTts = async (
   // 要求された言語だけ合成する（合成は文字数課金）
   const [jaAudio, enAudio] = await Promise.all([
     wantsJa
-      ? synthesizeSpeech({
-          apiKey: env.ELEVENLABS_API_KEY,
-          languageCode: 'ja',
-          voiceName: jaVoiceName,
-          text: textJa,
-          opts: ttsOptions,
-        })
+      ? synthesizeCheckedAnnouncement(
+          {
+            apiKey: env.ELEVENLABS_API_KEY,
+            languageCode: 'ja',
+            voiceName: jaVoiceName,
+            text: textJa,
+            opts: ttsOptions,
+          },
+          env.AI
+        )
       : null,
     wantsEn
       ? synthesizeSpeech({
