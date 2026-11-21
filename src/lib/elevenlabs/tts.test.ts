@@ -5,14 +5,14 @@ afterEach(() => {
 });
 
 it.each([
-  ['ja', '次はマエバシです。', '[若い女性車掌の声] 次はマエバシです。'],
+  ['ja', '次はマエバシです。', '次はマエバシです。'],
   [
     'en',
     'The next station is Shinjuku. Please change here for the Yamanote Line.',
     '[voice of a female commuter train conductor] The next station is Shinjuku. Please change here for the Yamanote Line.',
   ],
 ] as const)(
-  'prefixes the %s announcement sent to ElevenLabs',
+  'formats the %s announcement sent to ElevenLabs',
   async (languageCode, text, expected) => {
     const fetchMock = jest
       .spyOn(globalThis, 'fetch')

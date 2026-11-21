@@ -4,10 +4,7 @@ export const MODEL = 'eleven_v4';
 // 英語アナウンスは Imogen（女性）に固定する。
 export const ENGLISH_VOICE_ID = 'jv41DhCf464zw0TI7I1w';
 
-const conductorVoiceTag = {
-  ja: '[若い女性車掌の声]',
-  en: '[voice of a female commuter train conductor]',
-} as const;
+const englishVoiceTag = '[voice of a female commuter train conductor]';
 
 const formats = {
   mp3: ['mp3_44100_128', 'audio/mpeg'],
@@ -45,7 +42,7 @@ export const synthesizeSpeech = async (params: {
     const stream = await client.textToSpeech.convert(
       voiceName,
       {
-        text: `${conductorVoiceTag[languageCode]} ${text}`,
+        text: languageCode === 'en' ? `${englishVoiceTag} ${text}` : text,
         modelId: MODEL,
         ...(params.dictionary && {
           pronunciationDictionaryLocators: [params.dictionary],
