@@ -74,7 +74,9 @@ export const computeId = async (payload: {
   textEn: string;
   textJa: string;
 }): Promise<string> => {
-  const obj = { ...payload, version: HASH_VERSION } as const;
+  // 日本語の旧車掌タグで生成した音声は再利用しない。
+  const version = payload.textJa ? HASH_VERSION + 1 : HASH_VERSION;
+  const obj = { ...payload, version } as const;
   const hashPayload = JSON.stringify(obj, Object.keys(obj).sort());
   return sha256Hex(hashPayload);
 };

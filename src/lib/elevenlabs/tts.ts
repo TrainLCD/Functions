@@ -5,7 +5,7 @@ export const MODEL = 'eleven_v4';
 export const ENGLISH_VOICE_ID = 'jv41DhCf464zw0TI7I1w';
 
 const conductorVoiceTag = {
-  ja: '[通勤電車の車掌の声]',
+  ja: '[若い女性車掌の声]',
   en: '[voice of a female commuter train conductor]',
 } as const;
 
