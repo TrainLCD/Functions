@@ -5,7 +5,7 @@ afterEach(() => {
 });
 
 it.each([
-  ['ja', '次は前橋です。', '[若い女性車掌の声] 次は前橋です。'],
+  ['ja', '次はマエバシです。', '[若い女性車掌の声] 次はマエバシです。'],
   [
     'en',
     'The next station is Shinjuku. Please change here for the Yamanote Line.',
