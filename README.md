@@ -529,6 +529,9 @@ npm run find-orphaned-tts -- --env production --delete
 
 ### Eleven v4 の車内放送
 
+日本語のキャッシュ未命中時は、車掌タグを付けて合成した音声を既存の Workers AI binding の Whisper large-v3-turbo で文字起こしします。原稿にない「通勤電車」などのタグ由来の語を冒頭に検出した場合は、同じボイス・タグで一度だけ再生成・再検査します。再度検出した場合や検査に失敗した場合はエラーを返し、その音声は保存しません。通常の日本語キャッシュミスにつき文字起こしが1回、再生成時は計2回発生します。
+
+
 英語音声は [Imogen](https://elevenlabs.io/voices/jv41DhCf464zw0TI7I1w)
 （女性）に固定し、女性の通勤電車の車掌を指定するタグを付けます。
 英語の旧 KV `enVoiceId`・環境変数 `TTS_EN_VOICE_ID`・リクエストの音声指定は使用しません。

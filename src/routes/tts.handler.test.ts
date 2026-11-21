@@ -106,6 +106,7 @@ it('changes the cache ID by English dictionary version only for requests contain
   const env = {
     ELEVENLABS_API_KEY: 'test',
     TTS_JA_VOICE_ID: 'ja',
+    AI: { run: jest.fn().mockResolvedValue({ text: '次は' }) },
     TTS_EN_DICTIONARY_ID: 'stations',
     TTS_EN_DICTIONARY_VERSION_ID: 'v1',
     TTS_KV: { get: jest.fn().mockResolvedValue(null) },
@@ -135,3 +136,53 @@ it('changes the cache ID by English dictionary version only for requests contain
   env.TTS_EN_DICTIONARY_VERSION_ID = '';
   await expect(request('Mine')).rejects.toThrow('must be configured together');
 });
+
+it.each([false, true])(
+  'checks regenerated Japanese audio before delivery (second leak: %s)',
+  async (secondLeak) => {
+    const run = jest
+      .fn()
+      .mockResolvedValueOnce({ text: '通勤電車の次は前場所です' })
+      .mockResolvedValueOnce({
+        text: secondLeak
+          ? 'つうきんでんしゃの次は前橋です'
+          : '次は、前場所です。',
+      });
+    const synth = jest.mocked(synthesizeSpeech);
+    synth
+      .mockResolvedValueOnce({ audioContent: 'AAAA', mimeType: 'audio/mpeg' })
+      .mockResolvedValueOnce({ audioContent: 'BBBB', mimeType: 'audio/mpeg' });
+    const req = new Request('https://example.com/tts', {
+      method: 'POST',
+      body: JSON.stringify({ data: { textJa: '次はマエバシです。' } }),
+    });
+    const env = {
+      AI: { run },
+      TTS_KV: { get: jest.fn().mockResolvedValue(null) },
+      ELEVENLABS_API_KEY: 'test',
+      TTS_JA_VOICE_ID: 'ja',
+    } as unknown as Env;
+    const response = handleTts(req, env, {
+      waitUntil: jest.fn(),
+    } as unknown as ExecutionContext);
+    if (secondLeak) {
+      await expect(response).rejects.toThrow(
+        'repeated the delivery instruction'
+      );
+      expect(writeTtsCache).not.toHaveBeenCalled();
+    } else {
+      expect(await (await response).json()).toMatchObject({
+        result: { jaAudioContent: 'BBBB' },
+      });
+      expect(writeTtsCache).toHaveBeenCalledWith(
+        expect.objectContaining({ jaAudioContent: 'BBBB' }),
+        env
+      );
+    }
+    expect(run.mock.calls.map(([, input]) => input.audio)).toEqual([
+      'AAAA',
+      'BBBB',
+    ]);
+    expect(synth).toHaveBeenCalledTimes(2);
+  }
+);
