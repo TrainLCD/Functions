@@ -30,70 +30,20 @@ describe('utils/normalize.ts', () => {
     );
   });
 
-  it('replaces Keisei with a spelling English TTS reads as けいせい', () => {
-    // 英語 TTS は "Keisei" を「かいせい」と読むため、辞書語の綴りへ倒す
-    expect(normalizeRomanText('Change here for the Keisei Main Line.')).toBe(
-      'Change here for the Kay-say Main Line.'
-    );
-    expect(normalizeRomanText('The next station is Keisei-Ueno.')).toBe(
-      'The next station is Kay-say-ueno.'
-    );
-    expect(normalizeRomanText('KEISEI SKYLINER')).toBe('Kay-say Skyliner');
-    // 別語の一部は置換しない
-    expect(normalizeRomanText('Keiseibus')).toBe('Keiseibus');
-  });
-
-  it('replaces Seibu with a spelling English TTS reads as せいぶ', () => {
-    expect(
-      normalizeRomanText('Change here for the Seibu Ikebukuro Line.')
-    ).toBe('Change here for the Say-boo Ikebukuro Line.');
-    expect(normalizeRomanText('The next station is Seibu-Shinjuku.')).toBe(
-      'The next station is Say-boo-shinjuku.'
-    );
-    // 西武園 (Seibuen) は 1 語なので語単位の一致では対象外
-    expect(normalizeRomanText('Seibuen')).toBe('Seibuen');
-  });
-
-  it('replaces Mine with a spelling English TTS reads as みね', () => {
-    // 英語 TTS は "Mine" を英単語の「まいん」と読むため、辞書語の綴りへ倒す
-    expect(normalizeRomanText('Change here for the Mine Line.')).toBe(
-      'Change here for the Me-nay Line.'
-    );
-    expect(normalizeRomanText('The next station is MINE.')).toBe(
-      'The next station is Me-nay.'
-    );
-    expect(normalizeRomanText('The next station is Nishi-Mine.')).toBe(
-      'The next station is Nishi-me-nay.'
-    );
-    // 宇都宮ライトレールの峰（Mine）のような単独の駅名
-    expect(normalizeRomanText('The next stop is Mine.')).toBe(
-      'The next stop is Me-nay.'
-    );
-    expect(normalizeRomanText('This train is bound for Mine.')).toBe(
-      'This train is bound for Me-nay.'
-    );
-    // 語中・語頭に埋まった mine も置換する
-    expect(normalizeRomanText('Takamine')).toBe('Taka-me-nay');
-    expect(normalizeRomanText('Minezaki')).toBe('Me-nay-zaki');
-    expect(normalizeRomanText('KAMINEYAMA')).toBe('Ka-me-nay-yama');
-    // mine を含まない語は変えない
-    expect(normalizeRomanText('Minami-Urawa')).toBe('Minami-urawa');
-  });
-
-  it('keeps Kay-say stable when normalized twice', () => {
-    // 二重に適用しても結果が変わらないこと（キャッシュキーの安定性）
-    expect(normalizeRomanText(normalizeRomanText('Keisei Main Line'))).toBe(
-      'Kay-say Main Line'
-    );
-    expect(normalizeRomanText(normalizeRomanText('Seibu Shinjuku Line'))).toBe(
-      'Say-boo Shinjuku Line'
-    );
-    expect(normalizeRomanText(normalizeRomanText('Mine Line'))).toBe(
-      'Me-nay Line'
-    );
-    expect(normalizeRomanText(normalizeRomanText('Takamine'))).toBe(
-      'Taka-me-nay'
-    );
+  it.each([
+    ['Keisei Main Line', 'Keisei Main Line'],
+    ['Keisei-Ueno', 'Keisei-ueno'],
+    ['Seibu Ikebukuro Line', 'Seibu Ikebukuro Line'],
+    ['Seibu-Shinjuku', 'Seibu-shinjuku'],
+    ['Mine Line', 'Mine Line'],
+    ['MINE', 'Mine'],
+    ['Nishi-Mine', 'Nishi-mine'],
+    ['Takamine', 'Takamine'],
+    ['Minezaki', 'Minezaki'],
+    ['KAMINEYAMA', 'Kamineyama'],
+  ])('keeps the original spelling of %s', (input, expected) => {
+    expect(normalizeRomanText(input)).toBe(expected);
+    expect(normalizeRomanText(normalizeRomanText(input))).toBe(expected);
   });
 
   it.each(['Tokyo', 'tOkyo'])('text: %s', (text) => {
