@@ -27,6 +27,7 @@ it.each(['miss', 'hit', 'r2-failure'])(
     const expectedId = await computeId({
       enVoiceName: 'jv41DhCf464zw0TI7I1w',
       jaVoiceName: 'japanese-voice',
+      model: 'eleven_v4_turbo',
       pitch: null,
       speed: null,
       responseFormat: 'mp3',
