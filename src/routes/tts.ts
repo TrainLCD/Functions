@@ -1,4 +1,4 @@
-/** POST /tts — Eleven v4 で音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
+/** POST /tts — Eleven v4 Turbo で音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
 import { verifySessionToken } from '../lib/auth/session';
 import {
   CallableError,
@@ -21,7 +21,7 @@ import { stripSsml, utf8ByteLength } from '../utils/ssml';
 interface TtsRequest {
   textJa?: unknown;
   textEn?: unknown;
-  // 旧クライアントとの互換用。Eleven v4 は速度設定に対応しない。
+  // 旧クライアントとの互換用。合成時には使用しない。
   speed?: unknown;
 }
 
@@ -69,6 +69,7 @@ export const computeId = async (payload: {
   enDictionaryVersionId?: string;
   enVoiceName: string;
   jaVoiceName: string;
+  model: string;
   pitch: number | null;
   responseFormat: string;
   speed: number | null;
@@ -150,7 +151,7 @@ export const handleTts = async (
   // 環境変数は文字列なので、送信前に正規化した値を作る。この正規化後の値を
   // そのままキャッシュキーにも使い、設定変更が確実に別 ID になるようにする。
   const responseFormat = normalizeResponseFormat(env.TTS_RESPONSE_FORMAT);
-  // Eleven v4 は速度設定非対応。要求速度で同じ音声のキャッシュを分割しない。
+  // 合成に使用しない要求速度でキャッシュを分割しない。
   const ttsOptions = { responseFormat };
 
   const dictionaryId = wantsEn ? env.TTS_EN_DICTIONARY_ID?.trim() : '';
@@ -171,6 +172,7 @@ export const handleTts = async (
     enDictionaryVersionId: dictionary?.versionId,
     enVoiceName,
     jaVoiceName,
+    model: MODEL,
     pitch: null,
     responseFormat,
     speed: null,
@@ -217,7 +219,7 @@ export const handleTts = async (
     }
   }
 
-  // --- 合成（Eleven v4） ---
+  // --- 合成（Eleven v4 Turbo） ---
   // 要求された言語だけ合成する（合成は文字数課金）
   const [jaAudio, enAudio] = await Promise.all([
     wantsJa
