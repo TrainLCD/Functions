@@ -15,16 +15,6 @@ const capitalizeSegment = (seg: string): string => {
     : seg;
 };
 
-// Takamine / Minezaki のように語中・語頭に埋まった "mine" も読み替える。
-// 前後に英字が続く場合はハイフンで区切って "Me-nay" を独立させ、
-// 語頭のときだけ先頭を大文字にする（Takamine → Taka-me-nay）
-const replaceMine = (match: string, offset: number, str: string): string => {
-  const before = offset > 0 && /[A-Za-z]/.test(str.charAt(offset - 1));
-  const after = /[A-Za-z]/.test(str.charAt(offset + match.length));
-  const head = /[A-Z]/.test(match.charAt(0)) ? 'Me' : 'me';
-  return `${before ? '-' : ''}${head}-nay${after ? '-' : ''}`;
-};
-
 // テキストノード（SSML タグの外側）だけに掛ける正規化。タグやその属性値
 // （<sub alias="Sta."> や <phoneme ph="..."> 等）を壊さないため、タグ部分には適用しない。
 const normalizeTextNode = (text: string): string =>
@@ -45,17 +35,6 @@ const normalizeTextNode = (text: string): string =>
     // 明治神宮前駅等の駅名にバッククォートが含まれる場合があるため除去
     .replace(/`/g, '')
     .replace(/JR/gi, 'J-R')
-    // 「Keisei（京成）」「Seibu（西武）」は英語 TTS が "ei" を /aɪ/ と推定して
-    // 「かいせい」「さいぶ」と読むため、英単語 "Kay" + "say" / "Say" + "boo" で
-    // /keɪ.seɪ/（けいせい）/ /seɪ.buː/（せいぶ）を確定させる。読み替え先を
-    // 未知語の綴りにすると G2P の推定に戻ってエンジンごとに結果がぶれるので、
-    // 辞書語のハイフン連結にする。単語境界で一致させ、Keisei-Ueno のような
-    // ハイフン連結の駅名も語単位で置換する
-    .replace(/\bKeisei\b/gi, 'Kay-say')
-    .replace(/\bSeibu\b/gi, 'Say-boo')
-    // 「mine（美祢・峰など）」は英語 TTS が英単語 "mine"（まいん）として読むため、
-    // 同じく辞書語 "Me" + "nay" の連結で /mi.neɪ/（みね）に寄せる
-    .replace(/mine/gi, replaceMine)
     // 都営バスを想定
     .replace(/\bSta\./gi, ' Station')
     .replace(/\bUniv\./gi, ' University')
