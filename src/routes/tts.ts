@@ -47,6 +47,7 @@ interface VoiceCacheMeta {
 }
 
 const TEXT_BYTE_LIMIT = 4000;
+const GOOGLE_TEXT_BYTE_LIMIT = 5000;
 // 駅名・路線名タグ入りの旧音声を再利用しない。
 const HASH_VERSION = 23;
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -115,14 +116,18 @@ export const parseTtsText = (value: unknown, name: string): string => {
     return '';
   }
 
-  const bytes = utf8ByteLength(stripped);
-  if (bytes > TEXT_BYTE_LIMIT) {
+  validateTextByteLength(stripped, name, TEXT_BYTE_LIMIT);
+  return stripped;
+};
+
+const validateTextByteLength = (text: string, name: string, limit: number) => {
+  const bytes = utf8ByteLength(text);
+  if (bytes > limit) {
     throw new CallableError(
       'invalid-argument',
-      `${name} exceeds ${TEXT_BYTE_LIMIT} byte limit (${bytes} bytes)`
+      `${name} exceeds ${limit} byte limit (${bytes} bytes)`
     );
   }
-  return stripped;
 };
 
 const selectProvider = (env: Env, config: TtsConfig, wantsEn: boolean) => {
@@ -223,10 +228,11 @@ export const handleTts = async (
 
   const config = await getTtsConfig(env);
   const provider = selectProvider(env, config, wantsEn);
-  const textEn =
-    config.provider === 'elevenlabs'
-      ? normalizedEn
-      : applyGooglePronunciation(normalizedEn);
+  let textEn = normalizedEn;
+  if (config.provider !== 'elevenlabs') {
+    textEn = applyGooglePronunciation(normalizedEn);
+    validateTextByteLength(textEn, 'textEn', GOOGLE_TEXT_BYTE_LIMIT);
+  }
   const {
     model,
     responseFormat,
