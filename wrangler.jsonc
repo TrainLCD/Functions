@@ -93,6 +93,7 @@
   //   SESSION_JWT_SECRET / GOOGLE_PLAY_SA_KEY / APPSTORE_CONNECT_KEY /
   //   OCTOKIT_PAT / DISCORD_CS_WEBHOOK_URL / DISCORD_CRASH_WEBHOOK_URL / DISCORD_REVIEW_WEBHOOK_URL /
   //   ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_VERTEX_SA_KEY / LANGSMITH_API_KEY /
+  //   GOOGLE_TTS_SA_KEY (Google TTS)
   //   ELEVENLABS_API_KEY
 
   "env": {
@@ -131,7 +132,7 @@
         // dev と同じ。閾値を調整したらバージョンを固定する
         "TYPESAFE_MODEL": "jev-latest",
         // Japanese ElevenLabs voice; English is fixed to Imogen in code.
-        "TTS_JA_VOICE_ID": "OZ0L6eISlOejga3XjDFt",
+        "TTS_JA_VOICE_ID": "t3iNwCjYhE9IEQPVBlys",
         "TTS_SPEED": "1.0",
         "SESSION_TOKEN_TTL_SECONDS": "3600",
         "UPLOAD_PUBLIC_BASE_URL": "https://uploads.trainlcd.app",

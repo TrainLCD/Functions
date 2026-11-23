@@ -53,6 +53,12 @@ Use this as a starting point, not an exhaustive dependency map; re-check the cur
 - After synthesis, `ctx.waitUntil` calls `writeTtsCache` in `src/lib/ttsCache.ts`: R2 audio writes finish before KV metadata is written for later requests. Cache-write errors are logged independently of the audio response; this path does not use a queue.
 - For changes along this path, inspect `src/routes/tts.test.ts` for cache-ID and input cases and `src/lib/ttsCache.test.ts` for saved languages and metadata. Add mocked checks for affected behavior those tests do not cover, especially cache-hit/miss and failure branches; check the development and production TTS bindings in `wrangler.jsonc`.
 
+## Agent merge authorization and review
+
+- Opening or updating a PR, fixing review comments, monitoring CI, and finishing a task (including “最後まで”) authorize only those actions. Merge only when the user has explicitly authorized merging the particular PR into its target branch.
+- Immediately before merging, read the current PR base, head SHA, review decisions, unresolved threads, and required checks from GitHub. Require an independent, non-dismissed approving review on that exact head, no outstanding changes requested or unresolved review threads, and passing required checks. A green build, a mergeable flag, a bot summary, or resolved threads alone do not constitute approval.
+- If authorization or evidence is missing, keep the PR open and report exactly what is pending. Apply the same gate to auto-merge and merge queues. Never bypass it with administrative overrides, direct pushes to the target branch, or a direct deployment of the PR changes. When merging, pin the expected head SHA and recheck after any head change.
+
 ## Required Issue Linkage Before PR Publication
 
 - Every PR must include a real Issue reference in its related-issue section, including documentation, dependency, release, synchronization, and automated PRs.

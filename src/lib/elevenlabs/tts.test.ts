@@ -27,7 +27,7 @@ it.each([
     const init = fetchMock.mock.calls[0][1];
     expect(JSON.parse(String(init?.body))).toEqual({
       text: expected,
-      model_id: 'eleven_v4',
+      model_id: 'eleven_v4_turbo',
       language_code: languageCode,
     });
   }
@@ -155,7 +155,7 @@ it('logs provider diagnostics without the key, input text or other response fiel
       errorCode: 'paid_plan_required',
       requestId: 'request-123',
       languageCode: 'ja',
-      model: 'eleven_v4',
+      model: 'eleven_v4_turbo',
       message: 'Upgrade required: [REDACTED] [REDACTED]',
     })
   );

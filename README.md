@@ -6,7 +6,7 @@ single Worker.
 
 ## Features
 
-- **TTS synthesis** (`POST /tts`): synthesizes plain text into audio via ElevenLabs Eleven v4 and caches it in KV/R2.
+- **TTS synthesis** (`POST /tts`): synthesizes plain text into audio via ElevenLabs Eleven v4 Turbo and caches it in KV/R2.
 - **Session issuance** (`POST /auth/token`): issues a short-lived session JWT from an install ID (the replacement for Firebase anonymous auth).
 - **Feedback intake** (`POST /postFeedback`): enqueues feedback onto the triage queue.
 - **Image upload** (`POST /feedback/upload-image`): stores feedback images in R2 and returns a public URL.
@@ -22,7 +22,7 @@ single Worker.
 - **R2** — audio binaries and feedback images
 - **Cloudflare Queues** — `feedback-triage` (+ `feedback-triage-dlq` as its dead letter queue)
 - **Workers AI** — feedback triage
-- **ElevenLabs Eleven v4** — TTS synthesis (official SDK, API-key auth)
+- **ElevenLabs Eleven v4 Turbo** — TTS synthesis (official SDK, API-key auth)
 - **OpenAI** — the conversational agent
 - **Anthropic / Google Gemini (Vertex AI)** — alternative back ends for the
   conversational agent; the provider is selected by the `AGENT_MODEL` var
@@ -144,7 +144,13 @@ A session JWT is obtained from `POST /auth/token` (body `{ "installId": "<uuid>"
 
 ### `POST /tts`
 
-Synthesis uses Eleven v4. The client sends plain text; stray SSML tags are
+Set the `provider` field on the existing `TTS_KV` JSON entry `config:tts` to
+`"google"` or `"elevenlabs"`. Each Worker isolate caches the setting for five
+minutes. Google uses the `GOOGLE_TTS_SA_KEY` secret and the voices
+`ja-JP-Standard-B` and `en-US-Standard-G`. Each provider has separate audio
+cache entries. A missing or unknown provider selects Google.
+
+With ElevenLabs, synthesis uses Eleven v4 Turbo. The client sends plain text; stray SSML tags are
 stripped. English is fixed to Imogen (female); Japanese uses KV `jaVoiceId`
 then `TTS_JA_VOICE_ID`. Client voice overrides are ignored.
 
@@ -158,8 +164,7 @@ then `TTS_JA_VOICE_ID`. Client voice overrides are ignored.
 ```
 
 At least one language must contain nonempty text. Only requested languages
-are synthesized, cached, and returned. Eleven v4 does not support speed:
-changing the app's announcement speed does not affect generated speech.
+are synthesized, cached, and returned. Changing the app's announcement speed does not affect generated speech.
 Legacy `speed`, `TTS_SPEED`, and pitch settings are ignored; speed differences
 do not create separate cache entries. The callable response format is unchanged.
 
@@ -527,7 +532,7 @@ npm run find-orphaned-tts -- --delete
 npm run find-orphaned-tts -- --env production --delete
 ```
 
-### Eleven v4 の車内放送
+### Eleven v4 Turbo の車内放送
 
 日本語のキャッシュ未命中時は、車掌タグを付けて合成した音声を既存の Workers AI binding の Whisper large-v3-turbo で文字起こしします。原稿にない「通勤電車」などのタグ由来の語を冒頭に検出した場合は、同じボイス・タグで一度だけ再生成・再検査します。再度検出した場合や検査に失敗した場合はエラーを返し、その音声は保存しません。通常の日本語キャッシュミスにつき文字起こしが1回、再生成時は計2回発生します。
 
@@ -537,12 +542,13 @@ npm run find-orphaned-tts -- --env production --delete
 英語の旧 KV `enVoiceId`・環境変数 `TTS_EN_VOICE_ID`・リクエストの音声指定は使用しません。
 日本語は KV `jaVoiceId`、環境変数 `TTS_JA_VOICE_ID` の順で選択します。
 
-Eleven v4 は[速度設定に対応していません](https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech)。
 アプリで読み上げ速度を変更しても、サーバーで生成する音声には反映されません。
 互換性のためリクエストの `speed` は受け取りますが、`TTS_SPEED` とともに合成には使用せず、
 速度だけが異なる要求は同じキャッシュを使用します。
 
 ### 英語駅名の発音辞書
+
+Google では従来の読み替え規則を使い、Keisei を Kay-say、Seibu を Say-boo、Mine を Me-nay に変換する。Takamine や Minezaki のような複合名にも Mine の規則を適用する。
 
 `dictionaries/trainlcd-stations-en.pls` を ElevenLabs に一度登録し、返された
 `id` と `version_id` を Worker の環境変数 `TTS_EN_DICTIONARY_ID` と

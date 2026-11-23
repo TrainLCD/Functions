@@ -49,6 +49,7 @@ describe('computeId', () => {
   const base = {
     enVoiceName: 'en-US-Standard-G',
     jaVoiceName: 'ja-JP-Standard-B',
+    model: 'eleven_v4_turbo',
     pitch: null as number | null,
     responseFormat: 'mp3',
     speed: null as number | null,
@@ -67,6 +68,7 @@ describe('computeId', () => {
     ['enVoiceName', { enVoiceName: 'en-US-Wavenet-F' }],
     // responseFormat / speed はかつてネストしたオブジェクトに置いていたため、
     // JSON.stringify の配列 replacer に落とされて ID に反映されていなかった
+    ['model', { model: 'eleven_v4' }],
     ['responseFormat', { responseFormat: 'wav' }],
     ['speed', { speed: 1.25 }],
     ['pitch', { pitch: 1.5 }],
