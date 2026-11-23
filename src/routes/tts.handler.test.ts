@@ -27,7 +27,7 @@ beforeEach(() => {
 it.each(['miss', 'hit', 'r2-failure'])(
   'uses Imogen despite old overrides on a cache %s',
   async (cacheState) => {
-    const expectedId = await computeId({
+    const inputs = {
       enVoiceName: 'jv41DhCf464zw0TI7I1w',
       jaVoiceName: 'japanese-voice',
       model: 'eleven_v4_turbo',
@@ -36,7 +36,9 @@ it.each(['miss', 'hit', 'r2-failure'])(
       responseFormat: 'mp3',
       textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
       textJa: '',
-    });
+    };
+    const expectedId = await computeId(inputs);
+    const expectedAudioId = await computeId({ ...inputs, jaVoiceName: '' });
     const get = jest.fn(async (key: string) =>
       key === 'config:tts'
         ? { provider: 'elevenlabs', enVoiceId: 'old-male-voice' }
@@ -84,7 +86,10 @@ it.each(['miss', 'hit', 'r2-failure'])(
     if (cacheState === 'hit') {
       expect(synthesizeSpeech).not.toHaveBeenCalled();
       expect(writeTtsCache).toHaveBeenCalledWith(
-        expect.objectContaining({ enAudioContent: 'AQID' }),
+        expect.objectContaining({
+          id: expectedAudioId,
+          enAudioContent: 'AQID',
+        }),
         env
       );
     } else {
@@ -98,7 +103,7 @@ it.each(['miss', 'hit', 'r2-failure'])(
       });
       expect(writeTtsCache).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: expect.not.stringMatching(new RegExp(`^${expectedId}$`)),
+          id: expectedAudioId,
           voiceEn: 'jv41DhCf464zw0TI7I1w',
           textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
         }),
@@ -133,15 +138,17 @@ it('changes the cache ID by English dictionary version only for requests contain
   };
   const ja = await request('');
   const both = await request('Mine');
-  expect(synthesizeSpeech).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      languageCode: 'en',
-      dictionary: { pronunciationDictionaryId: 'stations', versionId: 'v1' },
-    })
-  );
   env.TTS_EN_DICTIONARY_VERSION_ID = 'v2';
   expect(await request('')).toBe(ja);
   expect(await request('Mine')).not.toBe(both);
+  const englishDictionaries = jest
+    .mocked(synthesizeSpeech)
+    .mock.calls.filter(([params]) => params.languageCode === 'en')
+    .map(([params]) => params.dictionary);
+  expect(englishDictionaries).toEqual([
+    { pronunciationDictionaryId: 'stations', versionId: 'v1' },
+    { pronunciationDictionaryId: 'stations', versionId: 'v2' },
+  ]);
   env.TTS_EN_DICTIONARY_VERSION_ID = '';
   await expect(request('Mine')).rejects.toThrow('must be configured together');
 });
