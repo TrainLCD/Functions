@@ -68,6 +68,7 @@ export interface Env {
    * アカウント認証のため。ロールは Vertex AI User 相当）
    */
   GOOGLE_VERTEX_SA_KEY?: string;
+  GOOGLE_TTS_SA_KEY?: string;
   ELEVENLABS_API_KEY?: string;
   TTS_EN_DICTIONARY_ID?: string;
   TTS_EN_DICTIONARY_VERSION_ID?: string;

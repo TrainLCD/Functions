@@ -1,6 +1,6 @@
 import { bytesToBase64 } from '../crypto';
 
-export const MODEL = 'eleven_v4';
+export const MODEL = 'eleven_v4_turbo';
 // 英語アナウンスは Imogen（女性）に固定する。
 export const ENGLISH_VOICE_ID = 'jv41DhCf464zw0TI7I1w';
 
@@ -52,7 +52,6 @@ export const synthesizeSpeech = async (params: {
         }),
         languageCode,
         outputFormat: format,
-        // Eleven v4 は speed 非対応のため送信しない。
       },
       {
         // 既存の単発リクエストと、本文受信を含む30秒の期限を維持する。
