@@ -563,3 +563,9 @@ curl --fail-with-body https://api.elevenlabs.io/v1/pronunciation-dictionaries/ad
 
 両方を省略すると従来どおり辞書なしで合成する。辞書を更新したら版IDも更新する。
 英語を含む要求は新しいキャッシュに切り替わる。
+
+### 旧TTSキャッシュを言語別に移行する
+
+`npm run backfill-tts-cache -- --env production` で、既存KVメタから再利用可能な未移行音声数を集計する。dev は `--env production` を省略する。Cloudflare の対象アカウントへの Wrangler 認証が必要。ElevenLabs の辞書を使用した音声には、生成時の `TTS_EN_DICTIONARY_ID` と `TTS_EN_DICTIONARY_VERSION_ID` を環境変数で指定する。英語単独の旧音声については、KVの日本語ボイス設定が空の場合、生成時の `TTS_JA_VOICE_ID` を指定する。
+
+同じコマンドに `--apply` を付けると、現行の検査世代・音声設定で旧IDを再現できた音声をR2にコピーし、言語別のKVメタを登録する。集計はKV上の候補数で、R2音声の存在確認はコピー時に行う。元データは保持し、既に言語別のKVメタがある項目はスキップする。辞書の旧版が複数あれば版ごとに実行できる。
