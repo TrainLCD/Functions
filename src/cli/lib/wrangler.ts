@@ -27,7 +27,7 @@ const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 // KV のキー一覧が大きくても標準出力を受け切れるよう拡張する。
 const MAX_BUFFER = 256 * 1024 * 1024;
 
-async function runWrangler(args: string[]): Promise<string> {
+export async function runWrangler(args: string[]): Promise<string> {
   try {
     const { stdout } = await execFileAsync(NPX, ['wrangler', ...args], {
       maxBuffer: MAX_BUFFER,

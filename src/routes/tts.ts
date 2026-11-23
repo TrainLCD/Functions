@@ -1,3 +1,7 @@
+import { computeAudioId, computeId } from '../lib/ttsCacheId';
+
+export { computeId } from '../lib/ttsCacheId';
+
 /** POST /tts — 設定されたプロバイダーで音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
 import { verifySessionToken } from '../lib/auth/session';
 import {
@@ -5,7 +9,7 @@ import {
   callableSuccess,
   parseCallableData,
 } from '../lib/callable';
-import { bytesToBase64, sha256Hex } from '../lib/crypto';
+import { bytesToBase64 } from '../lib/crypto';
 import { synthesizeCheckedAnnouncement } from '../lib/elevenlabs/checkedAnnouncement';
 import {
   ENGLISH_VOICE_ID,
@@ -48,8 +52,7 @@ interface VoiceCacheMeta {
 
 const TEXT_BYTE_LIMIT = 4000;
 const GOOGLE_TEXT_BYTE_LIMIT = 5000;
-// 駅名・路線名タグ入りの旧音声を再利用しない。
-const HASH_VERSION = 23;
+
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;
@@ -70,28 +73,6 @@ const getTtsConfig = async (env: Env): Promise<TtsConfig> => {
     console.warn('Failed to read tts config from KV:', e);
     return {};
   }
-};
-
-// JSON.stringify の第2引数に配列を渡すと「その名前のキーだけ」を全階層で
-// 直列化する。ネストしたオプションは名前がリストに無いと丸ごと落ちるため、
-// キャッシュキーへ含めたい値はすべてトップレベルへ平坦化して渡すこと。
-export const computeId = async (payload: {
-  enDictionaryId?: string;
-  enDictionaryVersionId?: string;
-  enVoiceName: string;
-  jaVoiceName: string;
-  model: string;
-  pitch: number | null;
-  responseFormat: string;
-  speed: number | null;
-  textEn: string;
-  textJa: string;
-}): Promise<string> => {
-  // 冒頭の車掌タグ混入を検査していない旧音声を再利用しない。
-  const version = payload.textJa ? HASH_VERSION + 2 : HASH_VERSION;
-  const obj = { ...payload, version } as const;
-  const hashPayload = JSON.stringify(obj, Object.keys(obj).sort());
-  return sha256Hex(hashPayload);
 };
 
 /**
@@ -239,7 +220,7 @@ export const handleTts = async (
     dictionary,
     voices: { ja: jaVoiceName, en: enVoiceName },
   } = provider;
-  const id = await computeId({
+  const cacheInputs = {
     enDictionaryId: dictionary?.pronunciationDictionaryId,
     enDictionaryVersionId: dictionary?.versionId,
     enVoiceName,
@@ -250,85 +231,78 @@ export const handleTts = async (
     speed: null,
     textEn,
     textJa,
-  });
-
-  // --- キャッシュ照会 ---
-  // id は「どの言語を要求したか」まで含めて決まるため、要求した言語のパスが
-  // 揃っていれば同じ組み合わせの再放送とみなせる。
-  const meta = await env.TTS_KV.get<VoiceCacheMeta>(`voice:${id}`, 'json');
-  if (meta && (!wantsJa || meta.pathJa) && (!wantsEn || meta.pathEn)) {
-    try {
-      const [jaObj, enObj] = await Promise.all([
-        wantsJa && meta.pathJa ? env.TTS_BUCKET.get(meta.pathJa) : null,
-        wantsEn && meta.pathEn ? env.TTS_BUCKET.get(meta.pathEn) : null,
-      ]);
-      if ((!wantsJa || jaObj) && (!wantsEn || enObj)) {
-        const [jaBuf, enBuf] = await Promise.all([
-          jaObj ? jaObj.arrayBuffer() : null,
-          enObj ? enObj.arrayBuffer() : null,
-        ]);
-        return callableSuccess({
-          id,
-          ...(jaBuf
-            ? {
-                jaAudioContent: bytesToBase64(jaBuf),
-                jaAudioMimeType: meta.jaAudioMimeType ?? 'audio/mpeg',
-              }
-            : {}),
-          ...(enBuf
-            ? {
-                enAudioContent: bytesToBase64(enBuf),
-                enAudioMimeType: meta.enAudioMimeType ?? 'audio/mpeg',
-              }
-            : {}),
-        });
+  };
+  const id = await computeId(cacheInputs);
+  // Preserve the response ID and read matching legacy entries on demand.
+  let legacyMeta: Promise<VoiceCacheMeta | null> | undefined;
+  const resolve = async (language: TtsLanguage, text: string) => {
+    if (!text) return null;
+    const ja = language === 'ja';
+    const audioId = await computeAudioId(cacheInputs, language);
+    const read = async (meta: VoiceCacheMeta | null) => {
+      const path = ja ? meta?.pathJa : meta?.pathEn;
+      if (!path) return null;
+      try {
+        const obj = await env.TTS_BUCKET.get(path);
+        if (!obj) return null;
+        return {
+          audioContent: bytesToBase64(await obj.arrayBuffer()),
+          mimeType:
+            (ja ? meta?.jaAudioMimeType : meta?.enAudioMimeType) ??
+            'audio/mpeg',
+        };
+      } catch (err) {
+        console.warn('Failed to read cached TTS audio:', err);
+        return null;
       }
-    } catch (e) {
-      console.warn(
-        'Cache hit but R2 read failed. Falling back to synthesis.',
-        e
-      );
-    }
-  }
-
-  const [jaAudio, enAudio] = await Promise.all([
-    wantsJa ? provider.synthesize('ja', textJa) : null,
-    wantsEn ? provider.synthesize('en', textEn) : null,
+    };
+    const cached = await read(
+      await env.TTS_KV.get<VoiceCacheMeta>(`voice:${audioId}`, 'json')
+    );
+    if (cached) return cached;
+    legacyMeta ??= env.TTS_KV.get<VoiceCacheMeta>(`voice:${id}`, 'json');
+    const legacy = await read(await legacyMeta);
+    const audio = legacy ?? (await provider.synthesize(language, text));
+    ctx.waitUntil(
+      writeTtsCache(
+        {
+          id: audioId,
+          model,
+          ...(ja
+            ? {
+                textJa: text,
+                voiceJa: jaVoiceName,
+                jaAudioContent: audio.audioContent,
+                jaAudioMimeType: audio.mimeType,
+              }
+            : {
+                textEn: text,
+                voiceEn: enVoiceName,
+                enAudioContent: audio.audioContent,
+                enAudioMimeType: audio.mimeType,
+              }),
+        },
+        env
+      ).catch((err) => console.error('Failed to cache tts audio:', err))
+    );
+    return audio;
+  };
+  // Let both languages schedule their successful writes even if one fails.
+  const [ja, en] = await Promise.allSettled([
+    resolve('ja', textJa),
+    resolve('en', textEn),
   ]);
-
-  // キャッシュ書き込みは非同期（失敗してもユーザー応答に影響させない）。
-  // 音声は Queues の上限(128KB)に収まらないため、キューを介さず R2+KV へ直接書く。
-  ctx.waitUntil(
-    writeTtsCache(
-      {
-        id,
-        jaAudioContent: jaAudio?.audioContent,
-        enAudioContent: enAudio?.audioContent,
-        jaAudioMimeType: jaAudio?.mimeType,
-        enAudioMimeType: enAudio?.mimeType,
-        textJa,
-        textEn,
-        model,
-        voiceJa: wantsJa ? jaVoiceName : undefined,
-        voiceEn: wantsEn ? enVoiceName : undefined,
-      },
-      env
-    ).catch((err) => console.error('Failed to cache tts audio:', err))
-  );
-
+  if (ja.status === 'rejected') throw ja.reason;
+  if (en.status === 'rejected') throw en.reason;
   return callableSuccess({
     id,
-    ...(jaAudio
-      ? {
-          jaAudioContent: jaAudio.audioContent,
-          jaAudioMimeType: jaAudio.mimeType,
-        }
-      : {}),
-    ...(enAudio
-      ? {
-          enAudioContent: enAudio.audioContent,
-          enAudioMimeType: enAudio.mimeType,
-        }
-      : {}),
+    ...(ja.value && {
+      jaAudioContent: ja.value.audioContent,
+      jaAudioMimeType: ja.value.mimeType,
+    }),
+    ...(en.value && {
+      enAudioContent: en.value.audioContent,
+      enAudioMimeType: en.value.mimeType,
+    }),
   });
 };
