@@ -252,168 +252,84 @@ export const handleTts = async (
     textJa,
   };
   const id = await computeId(cacheInputs);
-  if (config.provider === 'elevenlabs') {
-    // Preserve the response ID and read matching legacy entries on demand.
-    let legacyMeta: Promise<VoiceCacheMeta | null> | undefined;
-    const resolve = async (language: TtsLanguage, text: string) => {
-      if (!text) return null;
-      const ja = language === 'ja';
-      const audioId = await computeId({
-        ...cacheInputs,
-        textJa: ja ? text : '',
-        textEn: ja ? '' : text,
-        jaVoiceName: ja ? jaVoiceName : '',
-        enVoiceName: ja ? '' : enVoiceName,
-        enDictionaryId: ja ? undefined : cacheInputs.enDictionaryId,
-        enDictionaryVersionId: ja
-          ? undefined
-          : cacheInputs.enDictionaryVersionId,
-      });
-      const read = async (meta: VoiceCacheMeta | null) => {
-        const path = ja ? meta?.pathJa : meta?.pathEn;
-        if (!path) return null;
-        try {
-          const obj = await env.TTS_BUCKET.get(path);
-          if (!obj) return null;
-          return {
-            audioContent: bytesToBase64(await obj.arrayBuffer()),
-            mimeType:
-              (ja ? meta?.jaAudioMimeType : meta?.enAudioMimeType) ??
-              'audio/mpeg',
-          };
-        } catch (err) {
-          console.warn('Failed to read cached TTS audio:', err);
-          return null;
-        }
-      };
-      const cached = await read(
-        await env.TTS_KV.get<VoiceCacheMeta>(`voice:${audioId}`, 'json')
-      );
-      if (cached) return cached;
-      legacyMeta ??= env.TTS_KV.get<VoiceCacheMeta>(`voice:${id}`, 'json');
-      const legacy = await read(await legacyMeta);
-      const audio = legacy ?? (await provider.synthesize(language, text));
-      ctx.waitUntil(
-        writeTtsCache(
-          {
-            id: audioId,
-            model,
-            ...(ja
-              ? {
-                  textJa: text,
-                  voiceJa: jaVoiceName,
-                  jaAudioContent: audio.audioContent,
-                  jaAudioMimeType: audio.mimeType,
-                }
-              : {
-                  textEn: text,
-                  voiceEn: enVoiceName,
-                  enAudioContent: audio.audioContent,
-                  enAudioMimeType: audio.mimeType,
-                }),
-          },
-          env
-        ).catch((err) => console.error('Failed to cache tts audio:', err))
-      );
-      return audio;
-    };
-    // Let both languages schedule their successful writes even if one fails.
-    const [ja, en] = await Promise.allSettled([
-      resolve('ja', textJa),
-      resolve('en', textEn),
-    ]);
-    if (ja.status === 'rejected') throw ja.reason;
-    if (en.status === 'rejected') throw en.reason;
-    return callableSuccess({
-      id,
-      ...(ja.value && {
-        jaAudioContent: ja.value.audioContent,
-        jaAudioMimeType: ja.value.mimeType,
-      }),
-      ...(en.value && {
-        enAudioContent: en.value.audioContent,
-        enAudioMimeType: en.value.mimeType,
-      }),
+  // Preserve the response ID and read matching legacy entries on demand.
+  let legacyMeta: Promise<VoiceCacheMeta | null> | undefined;
+  const resolve = async (language: TtsLanguage, text: string) => {
+    if (!text) return null;
+    const ja = language === 'ja';
+    const audioId = await computeId({
+      ...cacheInputs,
+      textJa: ja ? text : '',
+      textEn: ja ? '' : text,
+      jaVoiceName: ja ? jaVoiceName : '',
+      enVoiceName: ja ? '' : enVoiceName,
+      enDictionaryId: ja ? undefined : cacheInputs.enDictionaryId,
+      enDictionaryVersionId: ja ? undefined : cacheInputs.enDictionaryVersionId,
     });
-  }
-
-  // --- キャッシュ照会 ---
-  // id は「どの言語を要求したか」まで含めて決まるため、要求した言語のパスが
-  // 揃っていれば同じ組み合わせの再放送とみなせる。
-  const meta = await env.TTS_KV.get<VoiceCacheMeta>(`voice:${id}`, 'json');
-  if (meta && (!wantsJa || meta.pathJa) && (!wantsEn || meta.pathEn)) {
-    try {
-      const [jaObj, enObj] = await Promise.all([
-        wantsJa && meta.pathJa ? env.TTS_BUCKET.get(meta.pathJa) : null,
-        wantsEn && meta.pathEn ? env.TTS_BUCKET.get(meta.pathEn) : null,
-      ]);
-      if ((!wantsJa || jaObj) && (!wantsEn || enObj)) {
-        const [jaBuf, enBuf] = await Promise.all([
-          jaObj ? jaObj.arrayBuffer() : null,
-          enObj ? enObj.arrayBuffer() : null,
-        ]);
-        return callableSuccess({
-          id,
-          ...(jaBuf
-            ? {
-                jaAudioContent: bytesToBase64(jaBuf),
-                jaAudioMimeType: meta.jaAudioMimeType ?? 'audio/mpeg',
-              }
-            : {}),
-          ...(enBuf
-            ? {
-                enAudioContent: bytesToBase64(enBuf),
-                enAudioMimeType: meta.enAudioMimeType ?? 'audio/mpeg',
-              }
-            : {}),
-        });
+    const read = async (meta: VoiceCacheMeta | null) => {
+      const path = ja ? meta?.pathJa : meta?.pathEn;
+      if (!path) return null;
+      try {
+        const obj = await env.TTS_BUCKET.get(path);
+        if (!obj) return null;
+        return {
+          audioContent: bytesToBase64(await obj.arrayBuffer()),
+          mimeType:
+            (ja ? meta?.jaAudioMimeType : meta?.enAudioMimeType) ??
+            'audio/mpeg',
+        };
+      } catch (err) {
+        console.warn('Failed to read cached TTS audio:', err);
+        return null;
       }
-    } catch (e) {
-      console.warn(
-        'Cache hit but R2 read failed. Falling back to synthesis.',
-        e
-      );
-    }
-  }
-
-  const [jaAudio, enAudio] = await Promise.all([
-    wantsJa ? provider.synthesize('ja', textJa) : null,
-    wantsEn ? provider.synthesize('en', textEn) : null,
+    };
+    const cached = await read(
+      await env.TTS_KV.get<VoiceCacheMeta>(`voice:${audioId}`, 'json')
+    );
+    if (cached) return cached;
+    legacyMeta ??= env.TTS_KV.get<VoiceCacheMeta>(`voice:${id}`, 'json');
+    const legacy = await read(await legacyMeta);
+    const audio = legacy ?? (await provider.synthesize(language, text));
+    ctx.waitUntil(
+      writeTtsCache(
+        {
+          id: audioId,
+          model,
+          ...(ja
+            ? {
+                textJa: text,
+                voiceJa: jaVoiceName,
+                jaAudioContent: audio.audioContent,
+                jaAudioMimeType: audio.mimeType,
+              }
+            : {
+                textEn: text,
+                voiceEn: enVoiceName,
+                enAudioContent: audio.audioContent,
+                enAudioMimeType: audio.mimeType,
+              }),
+        },
+        env
+      ).catch((err) => console.error('Failed to cache tts audio:', err))
+    );
+    return audio;
+  };
+  // Let both languages schedule their successful writes even if one fails.
+  const [ja, en] = await Promise.allSettled([
+    resolve('ja', textJa),
+    resolve('en', textEn),
   ]);
-
-  // キャッシュ書き込みは非同期（失敗してもユーザー応答に影響させない）。
-  // 音声は Queues の上限(128KB)に収まらないため、キューを介さず R2+KV へ直接書く。
-  ctx.waitUntil(
-    writeTtsCache(
-      {
-        id,
-        jaAudioContent: jaAudio?.audioContent,
-        enAudioContent: enAudio?.audioContent,
-        jaAudioMimeType: jaAudio?.mimeType,
-        enAudioMimeType: enAudio?.mimeType,
-        textJa,
-        textEn,
-        model,
-        voiceJa: wantsJa ? jaVoiceName : undefined,
-        voiceEn: wantsEn ? enVoiceName : undefined,
-      },
-      env
-    ).catch((err) => console.error('Failed to cache tts audio:', err))
-  );
-
+  if (ja.status === 'rejected') throw ja.reason;
+  if (en.status === 'rejected') throw en.reason;
   return callableSuccess({
     id,
-    ...(jaAudio
-      ? {
-          jaAudioContent: jaAudio.audioContent,
-          jaAudioMimeType: jaAudio.mimeType,
-        }
-      : {}),
-    ...(enAudio
-      ? {
-          enAudioContent: enAudio.audioContent,
-          enAudioMimeType: enAudio.mimeType,
-        }
-      : {}),
+    ...(ja.value && {
+      jaAudioContent: ja.value.audioContent,
+      jaAudioMimeType: ja.value.mimeType,
+    }),
+    ...(en.value && {
+      enAudioContent: en.value.audioContent,
+      enAudioMimeType: en.value.mimeType,
+    }),
   });
 };
