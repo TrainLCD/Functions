@@ -138,15 +138,17 @@ it('changes the cache ID by English dictionary version only for requests contain
   };
   const ja = await request('');
   const both = await request('Mine');
-  expect(synthesizeSpeech).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      languageCode: 'en',
-      dictionary: { pronunciationDictionaryId: 'stations', versionId: 'v1' },
-    })
-  );
   env.TTS_EN_DICTIONARY_VERSION_ID = 'v2';
   expect(await request('')).toBe(ja);
   expect(await request('Mine')).not.toBe(both);
+  const englishDictionaries = jest
+    .mocked(synthesizeSpeech)
+    .mock.calls.filter(([params]) => params.languageCode === 'en')
+    .map(([params]) => params.dictionary);
+  expect(englishDictionaries).toEqual([
+    { pronunciationDictionaryId: 'stations', versionId: 'v1' },
+    { pronunciationDictionaryId: 'stations', versionId: 'v2' },
+  ]);
   env.TTS_EN_DICTIONARY_VERSION_ID = '';
   await expect(request('Mine')).rejects.toThrow('must be configured together');
 });
