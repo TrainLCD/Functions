@@ -27,7 +27,7 @@ beforeEach(() => {
 it.each(['miss', 'hit', 'r2-failure'])(
   'uses Imogen despite old overrides on a cache %s',
   async (cacheState) => {
-    const expectedId = await computeId({
+    const inputs = {
       enVoiceName: 'jv41DhCf464zw0TI7I1w',
       jaVoiceName: 'japanese-voice',
       model: 'eleven_v4_turbo',
@@ -36,11 +36,13 @@ it.each(['miss', 'hit', 'r2-failure'])(
       responseFormat: 'mp3',
       textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
       textJa: '',
-    });
+    };
+    const expectedId = await computeId(inputs);
+    const expectedAudioId = await computeId({ ...inputs, jaVoiceName: '' });
     const get = jest.fn(async (key: string) =>
       key === 'config:tts'
         ? { provider: 'elevenlabs', enVoiceId: 'old-male-voice' }
-        : cacheState === 'miss'
+        : cacheState === 'miss' || key !== `voice:${expectedId}`
           ? null
           : { pathEn: 'en.mp3' }
     );
@@ -83,7 +85,13 @@ it.each(['miss', 'hit', 'r2-failure'])(
     expect(get).toHaveBeenCalledWith(`voice:${expectedId}`, 'json');
     if (cacheState === 'hit') {
       expect(synthesizeSpeech).not.toHaveBeenCalled();
-      expect(writeTtsCache).not.toHaveBeenCalled();
+      expect(writeTtsCache).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: expectedAudioId,
+          enAudioContent: 'AQID',
+        }),
+        env
+      );
     } else {
       expect(synthesizeSpeech).toHaveBeenCalledTimes(2);
       expect(synthesizeSpeech).toHaveBeenCalledWith({
@@ -95,9 +103,8 @@ it.each(['miss', 'hit', 'r2-failure'])(
       });
       expect(writeTtsCache).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: expectedId,
+          id: expectedAudioId,
           voiceEn: 'jv41DhCf464zw0TI7I1w',
-          jaAudioContent: undefined,
           textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
         }),
         env
@@ -131,15 +138,17 @@ it('changes the cache ID by English dictionary version only for requests contain
   };
   const ja = await request('');
   const both = await request('Mine');
-  expect(synthesizeSpeech).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      languageCode: 'en',
-      dictionary: { pronunciationDictionaryId: 'stations', versionId: 'v1' },
-    })
-  );
   env.TTS_EN_DICTIONARY_VERSION_ID = 'v2';
   expect(await request('')).toBe(ja);
   expect(await request('Mine')).not.toBe(both);
+  const englishDictionaries = jest
+    .mocked(synthesizeSpeech)
+    .mock.calls.filter(([params]) => params.languageCode === 'en')
+    .map(([params]) => params.dictionary);
+  expect(englishDictionaries).toEqual([
+    { pronunciationDictionaryId: 'stations', versionId: 'v1' },
+    { pronunciationDictionaryId: 'stations', versionId: 'v2' },
+  ]);
   env.TTS_EN_DICTIONARY_VERSION_ID = '';
   await expect(request('Mine')).rejects.toThrow('must be configured together');
 });
@@ -292,5 +301,78 @@ it('switches providers after config expiry and reuses only the selected provider
     );
   } finally {
     clock.mockRestore();
+  }
+});
+
+it('reuses each verified language across request combinations and a failed sibling', async () => {
+  const kv = new Map<string, string>();
+  const objects = new Map<string, Uint8Array>();
+  const writes: Promise<void>[] = [];
+  const env = {
+    ELEVENLABS_API_KEY: 'test',
+    TTS_JA_VOICE_ID: 'ja',
+    TTS_EN_DICTIONARY_ID: 'dict',
+    TTS_EN_DICTIONARY_VERSION_ID: 'v1',
+    AI: { run: jest.fn().mockResolvedValue({ text: '次は' }) },
+    TTS_KV: {
+      get: async (key: string) =>
+        key === 'config:tts'
+          ? { provider: 'elevenlabs' }
+          : JSON.parse(kv.get(key) ?? 'null'),
+      put: async (key: string, value: string) => kv.set(key, value),
+    },
+    TTS_BUCKET: {
+      get: async (key: string) =>
+        objects.has(key)
+          ? { arrayBuffer: async () => objects.get(key)?.buffer }
+          : null,
+      put: async (key: string, value: Uint8Array) => objects.set(key, value),
+    },
+  };
+  jest
+    .mocked(writeTtsCache)
+    .mockImplementation(jest.requireActual('../lib/ttsCache').writeTtsCache);
+  const request = async (textJa: string, textEn: string) => {
+    try {
+      return await handleTts(
+        new Request('https://example.com/tts', {
+          method: 'POST',
+          body: JSON.stringify({ data: { textJa, textEn } }),
+        }),
+        env as unknown as Env,
+        {
+          waitUntil: (p: Promise<void>) => writes.push(p),
+        } as unknown as ExecutionContext
+      );
+    } finally {
+      await Promise.all(writes);
+    }
+  };
+  jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 86400000);
+  try {
+    await request('次は', 'Next');
+    await request('次は', '');
+    await request('', 'Next');
+    expect(synthesizeSpeech).toHaveBeenCalledTimes(2);
+    env.TTS_EN_DICTIONARY_VERSION_ID = 'v2';
+    await request('次は', 'Next');
+    expect(synthesizeSpeech).toHaveBeenCalledTimes(3);
+    env.AI.run.mockRejectedValueOnce(new Error('transcription failed'));
+    await expect(request('到着', 'Arriving')).rejects.toThrow(
+      'transcription failed'
+    );
+    await request('到着', 'Arriving');
+    expect(
+      jest
+        .mocked(synthesizeSpeech)
+        .mock.calls.filter(([p]) => p.text === 'Arriving')
+    ).toHaveLength(1);
+    expect(
+      jest
+        .mocked(synthesizeSpeech)
+        .mock.calls.filter(([p]) => p.text === '到着')
+    ).toHaveLength(2);
+  } finally {
+    jest.restoreAllMocks();
   }
 });
