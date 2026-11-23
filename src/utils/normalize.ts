@@ -49,3 +49,20 @@ export const normalizeRomanText = (str: string | undefined): string => {
     .map((part) => (part.startsWith('<') ? part : normalizeTextNode(part)))
     .join('');
 };
+
+// Takamine / Minezaki のように語中・語頭に埋まった "mine" も読み替える。
+// 前後に英字が続く場合はハイフンで区切って "Me-nay" を独立させ、
+// 語頭のときだけ先頭を大文字にする（Takamine → Taka-me-nay）
+const replaceMine = (match: string, offset: number, str: string): string => {
+  const before = offset > 0 && /[A-Za-z]/.test(str.charAt(offset - 1));
+  const after = /[A-Za-z]/.test(str.charAt(offset + match.length));
+  const head = /[A-Z]/.test(match.charAt(0)) ? 'Me' : 'me';
+  return `${before ? '-' : ''}${head}-nay${after ? '-' : ''}`;
+};
+
+/** Google Cloud TTS に渡す正規化済みの英語原稿に、駅名の読み替えを適用する。 */
+export const applyGooglePronunciation = (text: string): string =>
+  text
+    .replace(/\bKeisei\b/gi, 'Kay-say')
+    .replace(/\bSeibu\b/gi, 'Say-boo')
+    .replace(/mine/gi, replaceMine);

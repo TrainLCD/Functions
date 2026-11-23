@@ -548,6 +548,8 @@ npm run find-orphaned-tts -- --env production --delete
 
 ### 英語駅名の発音辞書
 
+Google では従来の読み替え規則を使い、Keisei を Kay-say、Seibu を Say-boo、Mine を Me-nay に変換する。Takamine や Minezaki のような複合名にも Mine の規則を適用する。
+
 `dictionaries/trainlcd-stations-en.pls` を ElevenLabs に一度登録し、返された
 `id` と `version_id` を Worker の環境変数 `TTS_EN_DICTIONARY_ID` と
 `TTS_EN_DICTIONARY_VERSION_ID` にそれぞれ設定する。開発・本番で個別に設定できる。

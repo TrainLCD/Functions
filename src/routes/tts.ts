@@ -16,7 +16,10 @@ import {
 import { synthesizeSpeech as synthesizeGoogleSpeech } from '../lib/google/tts';
 import { writeTtsCache } from '../lib/ttsCache';
 import type { Env } from '../types';
-import { normalizeRomanText } from '../utils/normalize';
+import {
+  applyGooglePronunciation,
+  normalizeRomanText,
+} from '../utils/normalize';
 import { stripSsml, utf8ByteLength } from '../utils/ssml';
 import {
   DEFAULT_TTS_VOICE,
@@ -205,10 +208,12 @@ export const handleTts = async (
 
   const textJa = parseTtsText(data.textJa, 'textJa');
   // 英語は駅名の表記ゆれ（全角記号・略記・長音符・大文字表記）を吸収してから合成する
-  const textEn = normalizeRomanText(parseTtsText(data.textEn, 'textEn')).trim();
+  const normalizedEn = normalizeRomanText(
+    parseTtsText(data.textEn, 'textEn')
+  ).trim();
 
   const wantsJa = textJa.length > 0;
-  const wantsEn = textEn.length > 0;
+  const wantsEn = normalizedEn.length > 0;
   if (!wantsJa && !wantsEn) {
     throw new CallableError(
       'invalid-argument',
@@ -216,7 +221,12 @@ export const handleTts = async (
     );
   }
 
-  const provider = selectProvider(env, await getTtsConfig(env), wantsEn);
+  const config = await getTtsConfig(env);
+  const provider = selectProvider(env, config, wantsEn);
+  const textEn =
+    config.provider === 'elevenlabs'
+      ? normalizedEn
+      : applyGooglePronunciation(normalizedEn);
   const {
     model,
     responseFormat,

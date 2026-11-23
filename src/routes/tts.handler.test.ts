@@ -222,7 +222,12 @@ it('switches providers after config expiry and reuses only the selected provider
       const response = await handleTts(
         new Request('https://example.com/tts', {
           method: 'POST',
-          body: JSON.stringify({ data: { textJa: '次は', textEn: 'Tokyo' } }),
+          body: JSON.stringify({
+            data: {
+              textJa: '次は',
+              textEn: 'Keisei-Ueno, Seibu, Mine, Takamine, Minezaki, Seibuen.',
+            },
+          }),
         }),
         env as unknown as Env,
         { waitUntil: jest.fn() } as unknown as ExecutionContext
@@ -239,7 +244,11 @@ it('switches providers after config expiry and reuses only the selected provider
     });
     for (const [languageCode, voiceName, text] of [
       ['ja-JP', 'ja-JP-Standard-B', '次は'],
-      ['en-US', 'en-US-Standard-G', 'Tokyo'],
+      [
+        'en-US',
+        'en-US-Standard-G',
+        'Kay-say-ueno, Say-boo, Me-nay, Taka-me-nay, Me-nay-zaki, Seibuen.',
+      ],
     ]) {
       expect(synthesizeGoogleSpeech).toHaveBeenCalledWith({
         saKeyJson: 'service-account',
@@ -267,6 +276,12 @@ it('switches providers after config expiry and reuses only the selected provider
     });
     expect((await request()).id).not.toBe(google.id);
     expect(synthesizeSpeech).toHaveBeenCalledTimes(2);
+    expect(synthesizeSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        languageCode: 'en',
+        text: 'Keisei-ueno, Seibu, Mine, Takamine, Minezaki, Seibuen.',
+      })
+    );
     now += 300001;
     provider = 'google';
     expect(await request()).toEqual(google);
