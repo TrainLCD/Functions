@@ -3,6 +3,17 @@ import { computeAudioId, computeId } from '../../lib/ttsCacheId';
 import { DEFAULT_TTS_VOICE } from '../../utils/ttsVoice';
 import type { VoiceCacheRecord } from './wrangler';
 
+export function migrationSettings(
+  jaVoiceId: string | undefined,
+  env: Record<string, string | undefined>
+) {
+  return {
+    jaVoice: jaVoiceId || env.TTS_JA_VOICE_ID || '',
+    dictionaryId: env.TTS_EN_DICTIONARY_ID?.trim(),
+    dictionaryVersion: env.TTS_EN_DICTIONARY_VERSION_ID?.trim(),
+  };
+}
+
 export async function verifiedCopies(
   record: VoiceCacheRecord & {
     jaAudioMimeType?: string;
@@ -50,19 +61,22 @@ export async function verifiedCopies(
         const source = ja ? record.pathJa : record.pathEn;
         if (!(ja ? textJa : textEn) || !source) continue;
         const prefix = `caches/tts/${language}/`;
+        const mimeType =
+          (ja ? record.jaAudioMimeType : record.enAudioMimeType) ??
+          'audio/mpeg';
+        const legacyOpus =
+          responseFormat === 'opus' && mimeType === 'audio/ogg';
         const ext = source.split('.').pop();
         if (
           !ext ||
-          !['mp3', 'wav', 'opus'].includes(ext) ||
+          (!['mp3', 'wav', 'opus'].includes(ext) &&
+            !(ext === 'pcm' && legacyOpus)) ||
           source !== `${prefix}${record.id}.${ext}`
         )
           continue;
         const id = await computeAudioId(inputs, language);
         if (id === record.id) continue;
         const target = `${prefix}${id}.${ext}`;
-        const mimeType =
-          (ja ? record.jaAudioMimeType : record.enAudioMimeType) ??
-          'audio/mpeg';
         const meta = {
           id,
           model: base.model,

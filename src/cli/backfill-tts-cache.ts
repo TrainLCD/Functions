@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { verifiedCopies } from './lib/legacyTts';
+import { migrationSettings, verifiedCopies } from './lib/legacyTts';
 import {
   kvGetMany,
   kvListKeys,
@@ -25,14 +25,10 @@ async function main() {
   const keys = await kvListKeys('TTS_KV', 'voice:', env);
   const known = new Set(keys);
   const config = await kvGetMany('TTS_KV', ['config:tts'], env);
-  const settings = {
-    jaVoice:
-      JSON.parse(config.get('config:tts') ?? '{}')?.jaVoiceId ??
-      process.env.TTS_JA_VOICE_ID ??
-      '',
-    dictionaryId: process.env.TTS_EN_DICTIONARY_ID,
-    dictionaryVersion: process.env.TTS_EN_DICTIONARY_VERSION_ID,
-  };
+  const settings = migrationSettings(
+    JSON.parse(config.get('config:tts') ?? '{}')?.jaVoiceId,
+    process.env
+  );
   const dir = mkdtempSync(join(tmpdir(), 'tts-backfill-'));
   const file = join(dir, 'audio');
   let candidates = 0;
