@@ -144,7 +144,13 @@ A session JWT is obtained from `POST /auth/token` (body `{ "installId": "<uuid>"
 
 ### `POST /tts`
 
-Synthesis uses Eleven v4 Turbo. The client sends plain text; stray SSML tags are
+Set the `provider` field on the existing `TTS_KV` JSON entry `config:tts` to
+`"google"` or `"elevenlabs"`. Each Worker isolate caches the setting for five
+minutes. Google uses the `GOOGLE_TTS_SA_KEY` secret and the voices
+`ja-JP-Standard-B` and `en-US-Standard-G`. Each provider has separate audio
+cache entries. A missing or unknown provider selects Google.
+
+With ElevenLabs, synthesis uses Eleven v4 Turbo. The client sends plain text; stray SSML tags are
 stripped. English is fixed to Imogen (female); Japanese uses KV `jaVoiceId`
 then `TTS_JA_VOICE_ID`. Client voice overrides are ignored.
 
