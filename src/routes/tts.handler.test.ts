@@ -27,7 +27,7 @@ beforeEach(() => {
 it.each(['miss', 'hit', 'r2-failure'])(
   'uses Imogen despite old overrides on a cache %s',
   async (cacheState) => {
-    const expectedId = await computeId({
+    const inputs = {
       enVoiceName: 'jv41DhCf464zw0TI7I1w',
       jaVoiceName: 'japanese-voice',
       model: 'eleven_v4_turbo',
@@ -36,7 +36,9 @@ it.each(['miss', 'hit', 'r2-failure'])(
       responseFormat: 'mp3',
       textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
       textJa: '',
-    });
+    };
+    const expectedId = await computeId(inputs);
+    const expectedAudioId = await computeId({ ...inputs, jaVoiceName: '' });
     const get = jest.fn(async (key: string) =>
       key === 'config:tts'
         ? { provider: 'elevenlabs', enVoiceId: 'old-male-voice' }
@@ -84,7 +86,10 @@ it.each(['miss', 'hit', 'r2-failure'])(
     if (cacheState === 'hit') {
       expect(synthesizeSpeech).not.toHaveBeenCalled();
       expect(writeTtsCache).toHaveBeenCalledWith(
-        expect.objectContaining({ enAudioContent: 'AQID' }),
+        expect.objectContaining({
+          id: expectedAudioId,
+          enAudioContent: 'AQID',
+        }),
         env
       );
     } else {
@@ -98,7 +103,7 @@ it.each(['miss', 'hit', 'r2-failure'])(
       });
       expect(writeTtsCache).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: expect.not.stringMatching(new RegExp(`^${expectedId}$`)),
+          id: expectedAudioId,
           voiceEn: 'jv41DhCf464zw0TI7I1w',
           textEn: 'Keisei, Seibu, Mine, Takamine, Minezaki.',
         }),
