@@ -1,3 +1,7 @@
+import { computeAudioId, computeId } from '../lib/ttsCacheId';
+
+export { computeId } from '../lib/ttsCacheId';
+
 /** POST /tts — 設定されたプロバイダーで音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
 import { verifySessionToken } from '../lib/auth/session';
 import {
@@ -5,7 +9,7 @@ import {
   callableSuccess,
   parseCallableData,
 } from '../lib/callable';
-import { bytesToBase64, sha256Hex } from '../lib/crypto';
+import { bytesToBase64 } from '../lib/crypto';
 import { synthesizeCheckedAnnouncement } from '../lib/elevenlabs/checkedAnnouncement';
 import {
   ENGLISH_VOICE_ID,
@@ -48,8 +52,7 @@ interface VoiceCacheMeta {
 
 const TEXT_BYTE_LIMIT = 4000;
 const GOOGLE_TEXT_BYTE_LIMIT = 5000;
-// 駅名・路線名タグ入りの旧音声を再利用しない。
-const HASH_VERSION = 23;
+
 const TTS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let ttsConfigCache: { data: TtsConfig; fetchedAt: number } | null = null;
@@ -70,28 +73,6 @@ const getTtsConfig = async (env: Env): Promise<TtsConfig> => {
     console.warn('Failed to read tts config from KV:', e);
     return {};
   }
-};
-
-// JSON.stringify の第2引数に配列を渡すと「その名前のキーだけ」を全階層で
-// 直列化する。ネストしたオプションは名前がリストに無いと丸ごと落ちるため、
-// キャッシュキーへ含めたい値はすべてトップレベルへ平坦化して渡すこと。
-export const computeId = async (payload: {
-  enDictionaryId?: string;
-  enDictionaryVersionId?: string;
-  enVoiceName: string;
-  jaVoiceName: string;
-  model: string;
-  pitch: number | null;
-  responseFormat: string;
-  speed: number | null;
-  textEn: string;
-  textJa: string;
-}): Promise<string> => {
-  // 冒頭の車掌タグ混入を検査していない旧音声を再利用しない。
-  const version = payload.textJa ? HASH_VERSION + 2 : HASH_VERSION;
-  const obj = { ...payload, version } as const;
-  const hashPayload = JSON.stringify(obj, Object.keys(obj).sort());
-  return sha256Hex(hashPayload);
 };
 
 /**
@@ -257,15 +238,7 @@ export const handleTts = async (
   const resolve = async (language: TtsLanguage, text: string) => {
     if (!text) return null;
     const ja = language === 'ja';
-    const audioId = await computeId({
-      ...cacheInputs,
-      textJa: ja ? text : '',
-      textEn: ja ? '' : text,
-      jaVoiceName: ja ? jaVoiceName : '',
-      enVoiceName: ja ? '' : enVoiceName,
-      enDictionaryId: ja ? undefined : cacheInputs.enDictionaryId,
-      enDictionaryVersionId: ja ? undefined : cacheInputs.enDictionaryVersionId,
-    });
+    const audioId = await computeAudioId(cacheInputs, language);
     const read = async (meta: VoiceCacheMeta | null) => {
       const path = ja ? meta?.pathJa : meta?.pathEn;
       if (!path) return null;
