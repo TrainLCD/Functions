@@ -144,7 +144,13 @@ A session JWT is obtained from `POST /auth/token` (body `{ "installId": "<uuid>"
 
 ### `POST /tts`
 
-Synthesis uses Eleven v4 Turbo. The client sends plain text; stray SSML tags are
+Set the `provider` field on the existing `TTS_KV` JSON entry `config:tts` to
+`"google"` or `"elevenlabs"`. Each Worker isolate caches the setting for five
+minutes. Google uses the `GOOGLE_TTS_SA_KEY` secret and the voices
+`ja-JP-Standard-B` and `en-US-Standard-G`. Each provider has separate audio
+cache entries. A missing or unknown provider selects Google.
+
+With ElevenLabs, synthesis uses Eleven v4 Turbo. The client sends plain text; stray SSML tags are
 stripped. English is fixed to Imogen (female); Japanese uses KV `jaVoiceId`
 then `TTS_JA_VOICE_ID`. Client voice overrides are ignored.
 
@@ -541,6 +547,8 @@ npm run find-orphaned-tts -- --env production --delete
 速度だけが異なる要求は同じキャッシュを使用します。
 
 ### 英語駅名の発音辞書
+
+Google では従来の読み替え規則を使い、Keisei を Kay-say、Seibu を Say-boo、Mine を Me-nay に変換する。Takamine や Minezaki のような複合名にも Mine の規則を適用する。
 
 `dictionaries/trainlcd-stations-en.pls` を ElevenLabs に一度登録し、返された
 `id` と `version_id` を Worker の環境変数 `TTS_EN_DICTIONARY_ID` と

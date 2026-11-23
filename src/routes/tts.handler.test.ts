@@ -1,5 +1,6 @@
 import { verifySessionToken } from '../lib/auth/session';
 import { synthesizeSpeech } from '../lib/elevenlabs/tts';
+import { synthesizeSpeech as synthesizeGoogleSpeech } from '../lib/google/tts';
 import { writeTtsCache } from '../lib/ttsCache';
 import type { Env } from '../types';
 import { computeId, handleTts } from './tts';
@@ -10,6 +11,8 @@ jest.mock('../lib/elevenlabs/tts', () => ({
   ...jest.requireActual('../lib/elevenlabs/tts'),
   synthesizeSpeech: jest.fn(),
 }));
+
+jest.mock('../lib/google/tts', () => ({ synthesizeSpeech: jest.fn() }));
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -36,7 +39,7 @@ it.each(['miss', 'hit', 'r2-failure'])(
     });
     const get = jest.fn(async (key: string) =>
       key === 'config:tts'
-        ? { enVoiceId: 'old-male-voice' }
+        ? { provider: 'elevenlabs', enVoiceId: 'old-male-voice' }
         : cacheState === 'miss'
           ? null
           : { pathEn: 'en.mp3' }
@@ -110,7 +113,10 @@ it('changes the cache ID by English dictionary version only for requests contain
     AI: { run: jest.fn().mockResolvedValue({ text: '次は' }) },
     TTS_EN_DICTIONARY_ID: 'stations',
     TTS_EN_DICTIONARY_VERSION_ID: 'v1',
-    TTS_KV: { get: jest.fn().mockResolvedValue(null) },
+    TTS_KV: {
+      get: async (key: string) =>
+        key === 'config:tts' ? { provider: 'elevenlabs' } : null,
+    },
   };
   const request = async (textEn: string) => {
     const response = await handleTts(
@@ -159,7 +165,10 @@ it.each([false, true])(
     });
     const env = {
       AI: { run },
-      TTS_KV: { get: jest.fn().mockResolvedValue(null) },
+      TTS_KV: {
+        get: async (key: string) =>
+          key === 'config:tts' ? { provider: 'elevenlabs' } : null,
+      },
       ELEVENLABS_API_KEY: 'test',
       TTS_JA_VOICE_ID: 'ja',
     } as unknown as Env;
@@ -187,3 +196,101 @@ it.each([false, true])(
     expect(synth).toHaveBeenCalledTimes(2);
   }
 );
+
+it('switches providers after config expiry and reuses only the selected provider cache', async () => {
+  const clock = jest.spyOn(Date, 'now');
+  let now = Date.now() + 300001;
+  clock.mockImplementation(() => now);
+  try {
+    let provider: string | undefined;
+    const entries = new Map<string, { pathJa: string; pathEn: string }>();
+    const env = {
+      GOOGLE_TTS_SA_KEY: 'service-account',
+      TTS_EN_DICTIONARY_ID: 'eleven-only',
+      TTS_KV: {
+        get: async (key: string) =>
+          key === 'config:tts' ? { provider } : entries.get(key),
+      },
+      TTS_BUCKET: {
+        get: async () => ({ arrayBuffer: async () => Uint8Array.of(1).buffer }),
+      },
+    };
+    jest
+      .mocked(synthesizeGoogleSpeech)
+      .mockResolvedValue({ audioContent: 'AQ==', mimeType: 'audio/mpeg' });
+    const request = async () => {
+      const response = await handleTts(
+        new Request('https://example.com/tts', {
+          method: 'POST',
+          body: JSON.stringify({
+            data: {
+              textJa: '次は',
+              textEn: 'Keisei-Ueno, Seibu, Mine, Takamine, Minezaki, Seibuen.',
+            },
+          }),
+        }),
+        env as unknown as Env,
+        { waitUntil: jest.fn() } as unknown as ExecutionContext
+      );
+      return ((await response.json()) as { result: { id: string } }).result;
+    };
+    const google = await request();
+    expect(google).toEqual({
+      id: expect.any(String),
+      jaAudioContent: 'AQ==',
+      jaAudioMimeType: 'audio/mpeg',
+      enAudioContent: 'AQ==',
+      enAudioMimeType: 'audio/mpeg',
+    });
+    for (const [languageCode, voiceName, text] of [
+      ['ja-JP', 'ja-JP-Standard-B', '次は'],
+      [
+        'en-US',
+        'en-US-Standard-G',
+        'Kay-say-ueno, Say-boo, Me-nay, Taka-me-nay, Me-nay-zaki, Seibuen.',
+      ],
+    ]) {
+      expect(synthesizeGoogleSpeech).toHaveBeenCalledWith({
+        saKeyJson: 'service-account',
+        languageCode,
+        voiceName,
+        text,
+        opts: { responseFormat: 'mp3' },
+      });
+    }
+    expect(writeTtsCache).toHaveBeenCalledWith(
+      expect.objectContaining({ id: google.id, model: 'google-cloud-tts' }),
+      env
+    );
+    entries.set(`voice:${google.id}`, { pathJa: 'ja.mp3', pathEn: 'en.mp3' });
+    provider = 'elevenlabs';
+    now += 300001;
+    await expect(request()).rejects.toThrow(
+      'ELEVENLABS_API_KEY is not configured'
+    );
+    Object.assign(env, {
+      ELEVENLABS_API_KEY: 'test',
+      TTS_JA_VOICE_ID: 'ja',
+      TTS_EN_DICTIONARY_ID: '',
+      AI: { run: async () => ({ text: '次は' }) },
+    });
+    expect((await request()).id).not.toBe(google.id);
+    expect(synthesizeSpeech).toHaveBeenCalledTimes(2);
+    expect(synthesizeSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        languageCode: 'en',
+        text: 'Keisei-ueno, Seibu, Mine, Takamine, Minezaki, Seibuen.',
+      })
+    );
+    now += 300001;
+    provider = 'google';
+    expect(await request()).toEqual(google);
+    expect(synthesizeGoogleSpeech).toHaveBeenCalledTimes(2);
+    Object.assign(env, { GOOGLE_TTS_SA_KEY: undefined });
+    await expect(request()).rejects.toThrow(
+      'GOOGLE_TTS_SA_KEY is not configured'
+    );
+  } finally {
+    clock.mockRestore();
+  }
+});

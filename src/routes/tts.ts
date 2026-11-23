@@ -1,4 +1,4 @@
-/** POST /tts — Eleven v4 Turbo で音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
+/** POST /tts — 設定されたプロバイダーで音声合成し、KV/R2 キャッシュを介して返す（callable 互換）。 */
 import { verifySessionToken } from '../lib/auth/session';
 import {
   CallableError,
@@ -13,10 +13,19 @@ import {
   normalizeResponseFormat,
   synthesizeSpeech,
 } from '../lib/elevenlabs/tts';
+import { synthesizeSpeech as synthesizeGoogleSpeech } from '../lib/google/tts';
 import { writeTtsCache } from '../lib/ttsCache';
 import type { Env } from '../types';
-import { normalizeRomanText } from '../utils/normalize';
+import {
+  applyGooglePronunciation,
+  normalizeRomanText,
+} from '../utils/normalize';
 import { stripSsml, utf8ByteLength } from '../utils/ssml';
+import {
+  DEFAULT_TTS_VOICE,
+  languageCodeFromVoiceName,
+  type TtsLanguage,
+} from '../utils/ttsVoice';
 
 interface TtsRequest {
   textJa?: unknown;
@@ -26,6 +35,7 @@ interface TtsRequest {
 }
 
 interface TtsConfig {
+  provider?: 'elevenlabs' | 'google';
   jaVoiceId?: string;
 }
 
@@ -115,44 +125,40 @@ export const parseTtsText = (value: unknown, name: string): string => {
   return stripped;
 };
 
-export const handleTts = async (
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext
-): Promise<Response> => {
-  await verifySessionToken(env, req.headers.get('Authorization'));
-
-  const data = await parseCallableData<TtsRequest>(req);
-
-  const textJa = parseTtsText(data.textJa, 'textJa');
-  // 英語は駅名の表記ゆれ（全角記号・略記・長音符・大文字表記）を吸収してから合成する
-  const textEn = normalizeRomanText(parseTtsText(data.textEn, 'textEn')).trim();
-
-  const wantsJa = textJa.length > 0;
-  const wantsEn = textEn.length > 0;
-  if (!wantsJa && !wantsEn) {
-    throw new CallableError(
-      'invalid-argument',
-      'The function must be called with at least one of "textJa" or "textEn" containing the text to speak.'
-    );
+const selectProvider = (env: Env, config: TtsConfig, wantsEn: boolean) => {
+  const opts = {
+    responseFormat: normalizeResponseFormat(env.TTS_RESPONSE_FORMAT),
+  };
+  if (config.provider !== 'elevenlabs') {
+    const saKeyJson = env.GOOGLE_TTS_SA_KEY;
+    if (!saKeyJson) {
+      throw new CallableError(
+        'failed-precondition',
+        'GOOGLE_TTS_SA_KEY is not configured'
+      );
+    }
+    return {
+      model: 'google-cloud-tts',
+      voices: DEFAULT_TTS_VOICE,
+      responseFormat: opts.responseFormat,
+      synthesize: (language: TtsLanguage, text: string) =>
+        synthesizeGoogleSpeech({
+          saKeyJson,
+          languageCode: languageCodeFromVoiceName(DEFAULT_TTS_VOICE[language]),
+          voiceName: DEFAULT_TTS_VOICE[language],
+          text,
+          opts,
+        }),
+    };
   }
 
-  if (!env.ELEVENLABS_API_KEY) {
+  const apiKey = env.ELEVENLABS_API_KEY;
+  if (!apiKey) {
     throw new CallableError(
       'failed-precondition',
       'ELEVENLABS_API_KEY is not configured'
     );
   }
-
-  const ttsConfig = await getTtsConfig(env);
-  const jaVoiceName = ttsConfig.jaVoiceId || env.TTS_JA_VOICE_ID;
-  const enVoiceName = ENGLISH_VOICE_ID;
-
-  // 環境変数は文字列なので、送信前に正規化した値を作る。この正規化後の値を
-  // そのままキャッシュキーにも使い、設定変更が確実に別 ID になるようにする。
-  const responseFormat = normalizeResponseFormat(env.TTS_RESPONSE_FORMAT);
-  // 合成に使用しない要求速度でキャッシュを分割しない。
-  const ttsOptions = { responseFormat };
 
   const dictionaryId = wantsEn ? env.TTS_EN_DICTIONARY_ID?.trim() : '';
   const versionId = wantsEn ? env.TTS_EN_DICTIONARY_VERSION_ID?.trim() : '';
@@ -167,12 +173,72 @@ export const handleTts = async (
       ? { pronunciationDictionaryId: dictionaryId, versionId }
       : undefined;
 
+  const voices = {
+    ja: config.jaVoiceId || env.TTS_JA_VOICE_ID,
+    en: ENGLISH_VOICE_ID,
+  };
+  return {
+    model: MODEL,
+    voices,
+    responseFormat: opts.responseFormat,
+    dictionary,
+    synthesize: (languageCode: TtsLanguage, text: string) => {
+      const params = {
+        apiKey,
+        languageCode,
+        voiceName: voices[languageCode],
+        text,
+        opts,
+      };
+      return languageCode === 'ja'
+        ? synthesizeCheckedAnnouncement(params, env.AI)
+        : synthesizeSpeech({ ...params, dictionary });
+    },
+  };
+};
+
+export const handleTts = async (
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext
+): Promise<Response> => {
+  await verifySessionToken(env, req.headers.get('Authorization'));
+
+  const data = await parseCallableData<TtsRequest>(req);
+
+  const textJa = parseTtsText(data.textJa, 'textJa');
+  // 英語は駅名の表記ゆれ（全角記号・略記・長音符・大文字表記）を吸収してから合成する
+  const normalizedEn = normalizeRomanText(
+    parseTtsText(data.textEn, 'textEn')
+  ).trim();
+
+  const wantsJa = textJa.length > 0;
+  const wantsEn = normalizedEn.length > 0;
+  if (!wantsJa && !wantsEn) {
+    throw new CallableError(
+      'invalid-argument',
+      'The function must be called with at least one of "textJa" or "textEn" containing the text to speak.'
+    );
+  }
+
+  const config = await getTtsConfig(env);
+  const provider = selectProvider(env, config, wantsEn);
+  const textEn =
+    config.provider === 'elevenlabs'
+      ? normalizedEn
+      : applyGooglePronunciation(normalizedEn);
+  const {
+    model,
+    responseFormat,
+    dictionary,
+    voices: { ja: jaVoiceName, en: enVoiceName },
+  } = provider;
   const id = await computeId({
     enDictionaryId: dictionary?.pronunciationDictionaryId,
     enDictionaryVersionId: dictionary?.versionId,
     enVoiceName,
     jaVoiceName,
-    model: MODEL,
+    model,
     pitch: null,
     responseFormat,
     speed: null,
@@ -219,31 +285,9 @@ export const handleTts = async (
     }
   }
 
-  // --- 合成（Eleven v4 Turbo） ---
-  // 要求された言語だけ合成する（合成は文字数課金）
   const [jaAudio, enAudio] = await Promise.all([
-    wantsJa
-      ? synthesizeCheckedAnnouncement(
-          {
-            apiKey: env.ELEVENLABS_API_KEY,
-            languageCode: 'ja',
-            voiceName: jaVoiceName,
-            text: textJa,
-            opts: ttsOptions,
-          },
-          env.AI
-        )
-      : null,
-    wantsEn
-      ? synthesizeSpeech({
-          apiKey: env.ELEVENLABS_API_KEY,
-          languageCode: 'en',
-          voiceName: enVoiceName,
-          text: textEn,
-          dictionary,
-          opts: ttsOptions,
-        })
-      : null,
+    wantsJa ? provider.synthesize('ja', textJa) : null,
+    wantsEn ? provider.synthesize('en', textEn) : null,
   ]);
 
   // キャッシュ書き込みは非同期（失敗してもユーザー応答に影響させない）。
@@ -258,7 +302,7 @@ export const handleTts = async (
         enAudioMimeType: enAudio?.mimeType,
         textJa,
         textEn,
-        model: MODEL,
+        model,
         voiceJa: wantsJa ? jaVoiceName : undefined,
         voiceEn: wantsEn ? enVoiceName : undefined,
       },
