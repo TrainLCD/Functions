@@ -409,3 +409,42 @@ it.each(['elevenlabs', 'google'] as const)(
     }
   }
 );
+
+it('uses the theme voice for synthesis and cache metadata even for single-language announcements', async () => {
+  jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 3 * 86400000);
+  try {
+    const env = {
+      ELEVENLABS_API_KEY: 'test',
+      TTS_JA_VOICE_ID: 'default',
+      AI: { run: jest.fn().mockResolvedValue({ text: '次は東京です' }) },
+      TTS_KV: {
+        get: async (key: string) =>
+          key === 'config:tts' ? { provider: 'elevenlabs' } : null,
+      },
+    } as unknown as Env;
+    for (const [text, language, voiceName] of [
+      [{ textJa: '次は東京です' }, 'ja', 'EGPLqH9Wz2tNLu58EJVR'],
+      [{ textEn: 'Next stop Tokyo' }, 'en', 'xctasy8XvGp2cVO9HL9k'],
+    ] as const) {
+      await handleTts(
+        new Request('https://example.com/tts', {
+          method: 'POST',
+          body: JSON.stringify({ data: { theme: 'JR_315', ...text } }),
+        }),
+        env,
+        { waitUntil: jest.fn() } as unknown as ExecutionContext
+      );
+      expect(synthesizeSpeech).toHaveBeenLastCalledWith(
+        expect.objectContaining({ languageCode: language, voiceName })
+      );
+      expect(writeTtsCache).toHaveBeenLastCalledWith(
+        expect.objectContaining(
+          language === 'ja' ? { voiceJa: voiceName } : { voiceEn: voiceName }
+        ),
+        env
+      );
+    }
+  } finally {
+    jest.restoreAllMocks();
+  }
+});

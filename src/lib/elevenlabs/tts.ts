@@ -1,7 +1,7 @@
 import { bytesToBase64 } from '../crypto';
 
 export const MODEL = 'eleven_v4_turbo';
-// 英語アナウンスは Imogen（女性）に固定する。
+// 英語アナウンスは テーマ未指定時は Imogen（女性）を使う。
 export const ENGLISH_VOICE_ID = 'jv41DhCf464zw0TI7I1w';
 
 const conductorVoiceTag = {
