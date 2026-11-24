@@ -89,7 +89,7 @@ You can also bulk-load secrets with the helper scripts: copy
 
 See `vars` in `wrangler.jsonc`. Configure the Japanese TTS voice ID,
 AI model name, package name, and public upload URL per environment.
-English uses Imogen in every environment. TTS authenticates directly with
+The default English ElevenLabs voice is Imogen. TTS authenticates directly with
 ElevenLabs using `ELEVENLABS_API_KEY` and does not use Cloudflare AI Gateway.
 
 ### CI / CD (GitHub Actions)
@@ -151,8 +151,9 @@ minutes. Google uses the `GOOGLE_TTS_SA_KEY` secret and the voices
 cache entries. A missing or unknown provider selects Google.
 
 With ElevenLabs, synthesis uses Eleven v4 Turbo. The client sends plain text; stray SSML tags are
-stripped. English is fixed to Imogen (female); Japanese uses KV `jaVoiceId`
-then `TTS_JA_VOICE_ID`. Client voice overrides are ignored.
+stripped. The optional `data.theme` selects a Japanese and English voice from
+`src/lib/elevenlabs/themeVoices.ts`. Saikyo, missing themes, and unknown themes use
+Imogen for English and KV `jaVoiceId` or `TTS_JA_VOICE_ID` for Japanese.
 
 ```json
 {
@@ -537,10 +538,9 @@ npm run find-orphaned-tts -- --env production --delete
 日本語のキャッシュ未命中時は、車掌タグを付けて合成した音声を既存の Workers AI binding の Whisper large-v3-turbo で文字起こしします。原稿にない「通勤電車」などのタグ由来の語を冒頭に検出した場合は、同じボイス・タグで一度だけ再生成・再検査します。再度検出した場合や検査に失敗した場合はエラーを返し、その音声は保存しません。通常の日本語キャッシュミスにつき文字起こしが1回、再生成時は計2回発生します。
 
 
-英語音声は [Imogen](https://elevenlabs.io/voices/jv41DhCf464zw0TI7I1w)
-（女性）に固定し、女性の通勤電車の車掌を指定するタグを付けます。
+英語音声には女性の通勤電車の車掌を指定するタグを付けます。
 英語の旧 KV `enVoiceId`・環境変数 `TTS_EN_VOICE_ID`・リクエストの音声指定は使用しません。
-日本語は KV `jaVoiceId`、環境変数 `TTS_JA_VOICE_ID` の順で選択します。
+埼京線テーマ、未指定または未知のテーマでは、英語には Imogen を使い、日本語は KV `jaVoiceId`、環境変数 `TTS_JA_VOICE_ID` の順で選択します。
 
 アプリで読み上げ速度を変更しても、サーバーで生成する音声には反映されません。
 互換性のためリクエストの `speed` は受け取りますが、`TTS_SPEED` とともに合成には使用せず、

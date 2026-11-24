@@ -11,8 +11,8 @@ import {
 } from '../lib/callable';
 import { bytesToBase64 } from '../lib/crypto';
 import { synthesizeCheckedAnnouncement } from '../lib/elevenlabs/checkedAnnouncement';
+import { resolveThemeVoices } from '../lib/elevenlabs/themeVoices';
 import {
-  ENGLISH_VOICE_ID,
   MODEL,
   normalizeResponseFormat,
   synthesizeSpeech,
@@ -32,6 +32,7 @@ import {
 } from '../utils/ttsVoice';
 
 interface TtsRequest {
+  theme?: unknown;
   textJa?: unknown;
   textEn?: unknown;
   // 旧クライアントとの互換用。合成時には使用しない。
@@ -111,7 +112,12 @@ const validateTextByteLength = (text: string, name: string, limit: number) => {
   }
 };
 
-const selectProvider = (env: Env, config: TtsConfig, wantsEn: boolean) => {
+const selectProvider = (
+  env: Env,
+  config: TtsConfig,
+  wantsEn: boolean,
+  theme: unknown
+) => {
   const opts = {
     responseFormat: normalizeResponseFormat(env.TTS_RESPONSE_FORMAT),
   };
@@ -159,10 +165,10 @@ const selectProvider = (env: Env, config: TtsConfig, wantsEn: boolean) => {
       ? { pronunciationDictionaryId: dictionaryId, versionId }
       : undefined;
 
-  const voices = {
-    ja: config.jaVoiceId || env.TTS_JA_VOICE_ID,
-    en: ENGLISH_VOICE_ID,
-  };
+  const voices = resolveThemeVoices(
+    theme,
+    config.jaVoiceId || env.TTS_JA_VOICE_ID
+  );
   return {
     model: MODEL,
     voices,
@@ -208,7 +214,7 @@ export const handleTts = async (
   }
 
   const config = await getTtsConfig(env);
-  const provider = selectProvider(env, config, wantsEn);
+  const provider = selectProvider(env, config, wantsEn, data.theme);
   let textEn = normalizedEn;
   if (config.provider !== 'elevenlabs') {
     textEn = applyGooglePronunciation(normalizedEn);
