@@ -19,18 +19,7 @@ const themes = [
   'LOW_POWER',
 ];
 
-it('assigns a distinct voice to each theme even when only one language is enabled', () => {
-  const voices = themes.map((theme) =>
-    resolveThemeVoices(theme, 't3iNwCjYhE9IEQPVBlys')
-  );
-  for (const language of ['ja', 'en'] as const) {
-    expect(new Set(voices.map((pair) => pair[language])).size).toBe(
-      themes.length
-    );
-  }
-});
-
-it.each([undefined, null, 'SAIKYO', 'FUTURE_THEME', 'constructor', 42])(
+it.each([undefined, null, ...themes, 'FUTURE_THEME', 'constructor', 42])(
   'uses the existing voices for %p',
   (theme) => {
     expect(resolveThemeVoices(theme, 'configured')).toEqual({
