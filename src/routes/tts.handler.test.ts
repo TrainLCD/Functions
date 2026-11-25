@@ -423,8 +423,8 @@ it('uses the theme voice for synthesis and cache metadata even for single-langua
       },
     } as unknown as Env;
     for (const [text, language, voiceName] of [
-      [{ textJa: '次は東京です' }, 'ja', 'EGPLqH9Wz2tNLu58EJVR'],
-      [{ textEn: 'Next stop Tokyo' }, 'en', 'xctasy8XvGp2cVO9HL9k'],
+      [{ textJa: '次は東京です' }, 'ja', 'default'],
+      [{ textEn: 'Next stop Tokyo' }, 'en', 'jv41DhCf464zw0TI7I1w'],
     ] as const) {
       await handleTts(
         new Request('https://example.com/tts', {

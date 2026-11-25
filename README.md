@@ -152,7 +152,7 @@ cache entries. A missing or unknown provider selects Google.
 
 With ElevenLabs, synthesis uses Eleven v4 Turbo. The client sends plain text; stray SSML tags are
 stripped. The optional `data.theme` selects a Japanese and English voice from
-`src/lib/elevenlabs/themeVoices.ts`. Saikyo, missing themes, and unknown themes use
+`src/lib/elevenlabs/themeVoices.ts`. All themes and clients that omit the theme use
 Imogen for English and KV `jaVoiceId` or `TTS_JA_VOICE_ID` for Japanese.
 
 ```json
@@ -540,7 +540,7 @@ npm run find-orphaned-tts -- --env production --delete
 
 英語音声には女性の通勤電車の車掌を指定するタグを付けます。
 英語の旧 KV `enVoiceId`・環境変数 `TTS_EN_VOICE_ID`・リクエストの音声指定は使用しません。
-埼京線テーマ、未指定または未知のテーマでは、英語には Imogen を使い、日本語は KV `jaVoiceId`、環境変数 `TTS_JA_VOICE_ID` の順で選択します。
+テーマの指定にかかわらず、英語には Imogen を使い、日本語は KV `jaVoiceId`、環境変数 `TTS_JA_VOICE_ID` の順で選択します。
 
 アプリで読み上げ速度を変更しても、サーバーで生成する音声には反映されません。
 互換性のためリクエストの `speed` は受け取りますが、`TTS_SPEED` とともに合成には使用せず、
